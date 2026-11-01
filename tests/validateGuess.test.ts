@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { validateGuess } from '../src/game/validateGuess'
 
-describe('validateGuess: rejected', () => {
+const error = (guess: string, previous: string[] = []) => {
+  const r = validateGuess(guess, previous)
+  return r.valid ? null : r.error
+}
+
+describe('validateGuess: always rejected', () => {
   it.each([
     ['AAAAA', 'identical characters'],
     ['BBBBB', 'identical characters'],
@@ -18,16 +23,10 @@ describe('validateGuess: rejected', () => {
     ['حبيبي', 'Arabic script'],
     ['HA😀IB', 'emoji'],
   ])('%s (%s)', (guess) => {
-    const res = validateGuess(guess)
-    expect(res.valid).toBe(false)
-    if (!res.valid) expect(res.error.length).toBeGreaterThan(0)
+    expect(validateGuess(guess).valid).toBe(false)
   })
 
-  it('gives a distinct, friendly message for each rule', () => {
-    const error = (g: string, prev: string[] = []) => {
-      const r = validateGuess(g, prev)
-      return r.valid ? null : r.error
-    }
+  it('gives a distinct, friendly message for each basic rule', () => {
     expect(error('ABCD')).toBe('Five characters, ya zalame!')
     expect(error('HA@IB')).toBe("These characters aren't supported.")
     expect(error('AAAAA')).toBe("That's a lot of repeating letters.")
@@ -44,27 +43,49 @@ describe('validateGuess: rejected', () => {
   })
 })
 
-describe('validateGuess: passes basic filtering', () => {
-  it.each(['KIFAK', '7ABIB', '5ALAS', '3AJ2A', '2AHWE', 'YA3NE', 'SHWAY', 'KTEER'])('%s', (guess) => {
+describe('validateGuess: the small extra strictness', () => {
+  it.each(['AAAAB', 'AABBB', 'ABCCC', 'HAAAB', 'B2222', '777AB', 'KTEEE'])(
+    'rejects three or more identical characters in a row: %s',
+    (guess) => {
+      expect(error(guess)).toBe("That's a lot of repeating letters.")
+    },
+  )
+
+  it.each(['BCDRT', 'XQZTP', 'KRSTN', 'ZZXQK', 'PLNTS'])('rejects no vowel letter and no digit: %s', (guess) => {
+    expect(error(guess)).toBe("That doesn't look like a word.")
+  })
+
+  it.each(['SBRTA', 'ASTRK', 'MNBTK', 'ABCDF', 'KRSTA', 'BRDNY'])('rejects four consonants in a row: %s', (guess) => {
+    expect(error(guess)).toBe("That doesn't look like a word.")
+  })
+
+  it('counts SH, KH, GH, TH, DH and CH as one sound, so they do not trigger the cluster rule', () => {
+    for (const guess of ['SHRKA', 'AKHBR', 'MAGHR', 'ASHKR', 'DHRBA']) expect(validateGuess(guess).valid, guess).toBe(true)
+  })
+
+  it('lets digits and vowels break up clusters, and treats Y as a vowel', () => {
+    for (const guess of ['BNT7M', 'M3LM7', '3M7KL', 'MNYKH', 'KHBZ2', 'SHWAY']) {
+      expect(validateGuess(guess).valid, guess).toBe(true)
+    }
+  })
+
+  it('allows doubled letters', () => {
+    for (const guess of ['HABIB', 'MAMMA', 'KTEER', 'YALLA', 'TAAAB'.replace('AAA', 'AA') + 'X']) {
+      expect(validateGuess(guess).valid, guess).toBe(true)
+    }
+  })
+})
+
+describe('validateGuess: genuine Lebanese Arabizi still passes', () => {
+  it.each([
+    'KIFAK', '7ABIB', '5ALAS', '3AJ2A', '2AHWE', 'YA3NE', 'SHWAY', 'KTEER', 'BA7AR', 'SHAMS', 'YALLA',
+    'MNIH2', '5OBEZ', '7ELOU', 'ZGHIR', 'BA3ED', 'SA7EN', 'TAYYB', 'LEISH', 'HAYDA', 'MARRA', 'WALLA',
+  ])('%s', (guess) => {
     expect(validateGuess(guess)).toEqual({ valid: true, normalizedGuess: guess })
   })
 
-  it('lets unusual-looking combinations through: it is not a linguistic filter', () => {
-    for (const guess of [
-      'BCDRT', // no vowels
-      'XQZTP', // odd letters
-      '23578', // all digits
-      '222AB', // run of digits
-      'AAAAB', // repeated letters
-      'AABBB',
-      'ABCCC',
-      '77712', // mostly digits
-      'EERIE', // mostly vowels
-      'ZZXQK',
-      'HABIB',
-      'AAEEX', // vowels plus one consonant
-      '12345', // digits the keyboard does not offer
-    ]) {
+  it('does not judge digit-heavy or odd-looking words', () => {
+    for (const guess of ['23578', '12345', '77812', 'EERIE', 'AAEEX']) {
       expect(validateGuess(guess).valid, guess).toBe(true)
     }
   })

@@ -5,6 +5,7 @@ import { InfoBar } from './components/InfoBar'
 import { Keyboard } from './components/Keyboard'
 import { StatusPanel } from './components/StatusPanel'
 import { Toast } from './components/Toast'
+import { WordNudge } from './components/WordNudge'
 import { buildShareText } from './game/logic'
 import { useGame } from './game/useGame'
 
@@ -28,6 +29,7 @@ function hasSeenHelp(): boolean {
 
 export default function App() {
   const [modal, setModal] = useState<ModalName>(() => (hasSeenHelp() ? null : 'help'))
+  const [suggestSeed, setSuggestSeed] = useState('')
   const game = useGame(modal === null)
 
   const finished = game.status !== 'playing'
@@ -62,7 +64,10 @@ export default function App() {
       <Header
         onHelp={() => setModal('help')}
         onStats={() => setModal('stats')}
-        onSuggest={() => setModal('suggest')}
+        onSuggest={() => {
+          setSuggestSeed('')
+          setModal('suggest')
+        }}
       />
       <InfoBar
         attemptsLeft={game.attemptsLeft}
@@ -71,6 +76,17 @@ export default function App() {
         onViewResult={() => setModal('result')}
       />
       <Toast toast={game.toast} />
+      {game.unknownGuess && modal === null && (
+        <WordNudge
+          word={game.unknownGuess}
+          onSuggest={() => {
+            setSuggestSeed(game.unknownGuess ?? '')
+            game.dismissUnknownGuess()
+            setModal('suggest')
+          }}
+          onDismiss={game.dismissUnknownGuess}
+        />
+      )}
       {/* Announces each scored guess and the final result to screen readers. */}
       <div className="sr-only" role="status" aria-live="polite">
         {game.announcement}
@@ -113,7 +129,7 @@ export default function App() {
 
       <Suspense fallback={null}>
       {modal === 'help' && <HowToPlayModal onClose={closeModal} />}
-      {modal === 'suggest' && <SuggestModal onClose={closeModal} />}
+      {modal === 'suggest' && <SuggestModal onClose={closeModal} initialWord={suggestSeed} />}
       {modal === 'stats' && (
         <StatsModal
           stats={game.stats}

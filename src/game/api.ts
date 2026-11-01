@@ -92,6 +92,8 @@ export type GuessResponse =
       won: boolean
       lost: boolean
       answer: AnswerInfo | null
+      /** False when the word is not in the approved word list yet (the guess still counted). */
+      known: boolean
       /** Present while the game continues; must be sent back with the next guess. */
       stateToken: string | null
     }
@@ -105,14 +107,25 @@ export async function submitGuess(args: {
   guess: string
   stateToken: string | null
   puzzleDate: string
+  /** Anonymous random id, used only so each player is counted once in the community stats. */
+  playerId: string
 }): Promise<GuessResponse> {
   const data = await post<
     | { valid: false }
-    | { valid: true; result: TileState[]; won: boolean; lost: boolean; answer?: RawAnswer; state_token?: string }
+    | {
+        valid: true
+        result: TileState[]
+        won: boolean
+        lost: boolean
+        known?: boolean
+        answer?: RawAnswer
+        state_token?: string
+      }
   >('submit-guess', {
     guess: args.guess,
     ...(args.stateToken ? { state_token: args.stateToken } : {}),
     puzzle_date: args.puzzleDate,
+    player_id: args.playerId,
   })
   if (!data.valid) return { valid: false }
   return {
@@ -120,6 +133,8 @@ export async function submitGuess(args: {
     result: data.result,
     won: data.won,
     lost: data.lost,
+    // An older server version does not send this; assume known so nobody gets a pointless prompt.
+    known: data.known !== false,
     stateToken: data.state_token ?? null,
     answer: data.answer
       ? {
@@ -147,4 +162,23 @@ export async function submitSuggestion(fields: SuggestionFields): Promise<void> 
     arabic_spelling: fields.arabicSpelling,
     example_sentence: fields.exampleSentence,
   })
+}
+
+export interface CommunityBucket {
+  /** Index 0 = solved in 1 guess ... index 5 = solved in 6. */
+  solved: number[]
+  missed: number
+  /** Everyone who finished: solved plus missed. */
+  players: number
+}
+
+export interface CommunityStats {
+  today: CommunityBucket
+  allTime: CommunityBucket
+}
+
+/** Anonymous totals across all players: how many solved in 1, 2, ... 6 guesses. */
+export async function getCommunityStats(): Promise<CommunityStats> {
+  const data = await post<{ today: CommunityBucket; all_time: CommunityBucket }>('get-community-stats')
+  return { today: data.today, allTime: data.all_time }
 }

@@ -12,6 +12,7 @@ import {
 } from './logic'
 import {
   clearCachedPuzzle,
+  getPlayerId,
   loadCachedPuzzle,
   loadGame,
   loadStats,
@@ -72,6 +73,8 @@ export function useGame(inputEnabled: boolean) {
   const [shakeKey, setShakeKey] = useState(0)
   const [toast, setToast] = useState<Toast | null>(null)
   const [announcement, setAnnouncement] = useState('')
+  /** A guess the server accepted but did not recognise: we offer to suggest it. */
+  const [unknownGuess, setUnknownGuess] = useState<string | null>(null)
 
   const timers = useRef<number[]>([])
   const toastId = useRef(0)
@@ -183,6 +186,7 @@ export function useGame(inputEnabled: boolean) {
   const addLetter = useCallback(
     (ch: string) => {
       if (!canType || !isValidChar(ch)) return
+      setUnknownGuess(null)
       setCurrent((c) => (c.length < WORD_LENGTH ? c + ch.toLowerCase() : c))
     },
     [canType],
@@ -228,6 +232,7 @@ export function useGame(inputEnabled: boolean) {
         guess,
         stateToken,
         puzzleDate: puzzle.puzzleDate,
+        playerId: getPlayerId(),
       })
       // Not an approved word: no attempt is spent and the row stays editable.
       if (!res.valid) return reject('Not in word list')
@@ -256,6 +261,12 @@ export function useGame(inputEnabled: boolean) {
       // Persist stats now (survives a refresh mid-animation) but show them after the reveal.
       const nextStats =
         nextStatus === 'playing' ? null : recordResult(puzzle.puzzleDate, nextStatus === 'won', nextGuesses.length)
+
+      // Offer to suggest the word once its tiles have been revealed, and tidy the prompt away later.
+      if (!res.known) {
+        later(() => setUnknownGuess(guess), revealDelay())
+        later(() => setUnknownGuess((g) => (g === guess ? null : g)), revealDelay() + 10_000)
+      }
 
       later(() => {
         setRevealedCount(nextGuesses.length)
@@ -335,6 +346,8 @@ export function useGame(inputEnabled: boolean) {
     shakeKey,
     toast,
     announcement,
+    unknownGuess,
+    dismissUnknownGuess: () => setUnknownGuess(null),
     submitting,
     restoredFinished,
     revealingRow: revealing ? guesses.length - 1 : null,

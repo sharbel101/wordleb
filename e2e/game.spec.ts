@@ -12,6 +12,21 @@ const rowStates = (page: Page, row: number) =>
     .evaluateAll((tiles) => tiles.map((t) => (['correct', 'present', 'absent'].find((s) => t.classList.contains(s)) ?? 'none')))
 
 const toast = (page: Page) => page.locator('.toast')
+
+/**
+ * Plays all six wrong words, waiting for each guess to register before the next. Input is ignored
+ * while a row is being scored or revealed, so a guess typed too early is retried from a clean row
+ * rather than relying on fixed sleeps (which flake when several browsers run at once).
+ */
+async function playWrongWords(page: Page) {
+  for (const [i, word] of WRONG_WORDS.entries()) {
+    await expect(async () => {
+      for (let k = 0; k < 5; k++) await page.keyboard.press('Backspace')
+      await guess(page, word)
+      await expect(page.locator('.row').nth(i).locator('.tile.correct, .tile.present, .tile.absent').first()).toBeVisible({ timeout: 2000 })
+    }).toPass({ timeout: 20_000 })
+  }
+}
 const attemptsText = (page: Page) => page.locator('.info-label').first()
 
 test.beforeEach(async ({ page }) => {
@@ -210,10 +225,7 @@ test.describe('winning and losing', () => {
     await page.emulateMedia({ reducedMotion: 'reduce' })
     const mock = await mockSupabase(page)
     await openGame(page)
-    for (const word of WRONG_WORDS) {
-      await guess(page, word)
-      await page.waitForTimeout(600)
-    }
+    await playWrongWords(page)
     const dialog = page.getByRole('dialog', { name: 'Not this time' })
     await expect(dialog).toBeVisible({ timeout: 8000 })
     await expect(dialog).toContainText('Bread')
@@ -304,6 +316,206 @@ test.describe('tamper-proof attempt counting', () => {
   })
 })
 
+test.describe('community stats (all players)', () => {
+  const openStats = async (page: Page) => {
+    await page.getByRole('button', { name: 'Statistics' }).click()
+    return page.getByRole('dialog', { name: 'Statistics' })
+  }
+
+  test('a friend on another phone counts: two first-try wins show as 2 players', async ({ page, browser }) => {
+    const shared = new Map<string, number>() // the "server" both phones talk to
+    await mockSupabase(page, { community: shared })
+    await openGame(page)
+    await guess(page, '5obez')
+    await expect(page.getByRole('dialog', { name: 'You got it' })).toBeVisible({ timeout: 8000 })
+
+    // The friend: a completely separate browser profile (own storage, own anonymous id).
+    const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true })
+    const friend = await phone.newPage()
+    await skipHelp(friend)
+    await mockSupabase(friend, { community: shared })
+    await openGame(friend)
+    await guess(friend, '5obez')
+    await expect(friend.getByRole('dialog', { name: 'You got it' })).toBeVisible({ timeout: 8000 })
+    await phone.close()
+
+    expect(shared.size).toBe(2)
+    await page.keyboard.press('Escape')
+    const dialog = await openStats(page)
+    await expect(dialog.getByText('players finished today')).toBeVisible()
+    await expect(dialog.getByLabel('Solved in 1: 2 players')).toBeVisible()
+    await expect(dialog.getByLabel('Did not solve: 0 players')).toBeVisible()
+  })
+
+  test('each browser sends one stable anonymous id, so reloading never double counts', async ({ page }) => {
+    const mock = await mockSupabase(page)
+    await openGame(page)
+    await guess(page, 'yalla')
+    await page.waitForTimeout(2200)
+    await guess(page, '5obez')
+    await expect(page.getByRole('dialog', { name: 'You got it' })).toBeVisible({ timeout: 8000 })
+    await page.keyboard.press('Escape')
+
+    const ids = mock.requests.filter((r) => r.fn === 'submit-guess').map((r) => r.body.player_id)
+    expect(ids).toHaveLength(2)
+    expect(ids[0]).toMatch(/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/)
+    expect(ids[1]).toBe(ids[0])
+    expect(mock.community.size).toBe(1)
+    expect([...mock.community.values()]).toEqual([2]) // solved on guess 2
+
+    await page.reload()
+    await page.locator('.board-wrap:not(.loading)').waitFor()
+    const dialog = await openStats(page)
+    await expect(dialog.getByLabel('Solved in 2: 1 player')).toBeVisible()
+    await expect(dialog.getByText('player finished today')).toBeVisible()
+    expect(mock.community.size).toBe(1)
+  })
+
+  test('a loss counts as "did not solve"', async ({ page }) => {
+    const mock = await mockSupabase(page)
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await openGame(page)
+    await playWrongWords(page)
+    await expect(page.getByRole('dialog', { name: 'Not this time' })).toBeVisible({ timeout: 8000 })
+    expect([...mock.community.values()]).toEqual([0])
+    await page.keyboard.press('Escape')
+    const dialog = await openStats(page)
+    await expect(dialog.getByLabel('Did not solve: 1 player')).toBeVisible()
+  })
+
+  test('Today and All time are separate, and other days are not mixed into today', async ({ page }) => {
+    const earlier = '0b8f3a52-5c1e-4d6a-9f27-3e1a7c9d4b10'
+    await mockSupabase(page, { community: new Map([['2000-01-01|' + earlier, 3]]) })
+    await openGame(page)
+    const dialog = await openStats(page)
+    await expect(dialog.getByText("Nobody has finished today's puzzle yet.")).toBeVisible()
+    await dialog.getByRole('button', { name: 'All time' }).click()
+    await expect(dialog.getByText('1 player finished')).toBeVisible()
+    await expect(dialog.getByLabel('Solved in 3: 1 player')).toBeVisible()
+    await dialog.getByRole('button', { name: 'Today' }).click()
+    await expect(dialog.getByText("Nobody has finished today's puzzle yet.")).toBeVisible()
+  })
+
+  test('if community stats fail, personal stats still show and the section can retry', async ({ page }) => {
+    const mock = await mockSupabase(page, { statsMode: 'down' })
+    await openGame(page)
+    const dialog = await openStats(page)
+    await expect(dialog.getByText("Community stats aren't available right now.")).toBeVisible()
+    await expect(dialog.getByText('Played')).toBeVisible() // your own stats are unaffected
+    mock.statsMode = 'ok'
+    await dialog.getByRole('button', { name: 'Try again' }).click()
+    await expect(dialog.getByText("Nobody has finished today's puzzle yet.")).toBeVisible()
+  })
+})
+
+test.describe('growing the word list from play', () => {
+  const nudge = (page: Page) => page.locator('.nudge')
+
+  test('an unknown word is accepted, counted, logged, and offered for suggestion', async ({ page }) => {
+    const mock = await mockSupabase(page, { enforce: false })
+    await openGame(page)
+    await guess(page, 'mnaqo')
+    await expect(attemptsText(page)).toHaveText('5 attempts left') // the guess counted
+    await expect(nudge(page)).toContainText("MNAQO isn't in our word list yet.", { timeout: 8000 })
+    expect([...mock.unknownLog.keys()]).toEqual(['mnaqo'])
+    expect(mock.unknownLog.get('mnaqo')!.size).toBe(1)
+
+    await nudge(page).getByRole('button', { name: 'Suggest it' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Suggest a word' })
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByLabel('Word (5 characters)')).toHaveValue('mnaqo') // prefilled
+    await expect(nudge(page)).toHaveCount(0)
+  })
+
+  test('known words and the answer cause no prompt and are not logged', async ({ page }) => {
+    const mock = await mockSupabase(page, { enforce: false })
+    await openGame(page)
+    await guess(page, 'yalla') // in the dictionary
+    await page.waitForTimeout(2600)
+    await expect(nudge(page)).toHaveCount(0)
+    await guess(page, '5obez') // the answer
+    await expect(page.getByRole('dialog', { name: 'You got it' })).toBeVisible({ timeout: 8000 })
+    await expect(nudge(page)).toHaveCount(0)
+    expect(mock.unknownLog.size).toBe(0)
+  })
+
+  test('two different phones trying the same unknown word are counted as two players', async ({ page, browser }) => {
+    const shared = new Map<string, Set<string>>()
+    await mockSupabase(page, { enforce: false, unknownLog: shared })
+    await openGame(page)
+    await guess(page, 'mnaqo')
+    await expect(attemptsText(page)).toHaveText('5 attempts left')
+
+    const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true })
+    const friend = await phone.newPage()
+    await skipHelp(friend)
+    await mockSupabase(friend, { enforce: false, unknownLog: shared })
+    await openGame(friend)
+    await guess(friend, 'mnaqo')
+    await expect(friend.locator('.info-label').first()).toHaveText('5 attempts left')
+    await phone.close()
+
+    expect(shared.get('mnaqo')!.size).toBe(2)
+  })
+
+  test('the same player trying the same unknown word again is not double counted', async ({ page }) => {
+    const mock = await mockSupabase(page, { enforce: false })
+    await openGame(page)
+    await guess(page, 'mnaqo')
+    await page.waitForTimeout(2200)
+    await page.reload()
+    await page.locator('.board-wrap:not(.loading)').waitFor()
+    await guess(page, 'ztaqo') // a different unknown word from the same browser
+    await expect(attemptsText(page)).toHaveText('4 attempts left')
+    const ids = new Set([...mock.unknownLog.values()].flatMap((s) => [...s]))
+    expect(ids.size).toBe(1) // one browser, one stable id, across both words
+  })
+
+  test('the prompt can be dismissed, and goes away when the player keeps typing', async ({ page }) => {
+    await mockSupabase(page, { enforce: false })
+    await openGame(page)
+    await guess(page, 'mnaqo')
+    await expect(nudge(page)).toBeVisible({ timeout: 8000 })
+    await nudge(page).getByRole('button', { name: 'Dismiss' }).click()
+    await expect(nudge(page)).toHaveCount(0)
+
+    await guess(page, 'ztaqo')
+    await expect(nudge(page)).toBeVisible({ timeout: 8000 })
+    await page.keyboard.type('k')
+    await expect(nudge(page)).toHaveCount(0)
+  })
+
+  test('the slightly stricter filter rejects obvious nonsense locally, with no request', async ({ page }) => {
+    const mock = await mockSupabase(page, { enforce: false })
+    await openGame(page)
+    for (const [word, message] of [
+      ['bcdrt', "That doesn't look like a word."], // no vowel, no digit
+      ['astrk', "That doesn't look like a word."], // four consonants in a row
+      ['aaabc', "That's a lot of repeating letters."], // three identical in a row
+    ] as const) {
+      await guess(page, word)
+      await expect(toast(page)).toHaveText(message)
+      for (let i = 0; i < 5; i++) await page.keyboard.press('Backspace')
+      await page.waitForTimeout(1700) // let the toast clear
+    }
+    expect(mock.requests.filter((r) => r.fn === 'submit-guess')).toHaveLength(0)
+  })
+
+  test('real Lebanese spellings still pass the stricter filter', async ({ page }) => {
+    const mock = await mockSupabase(page, { enforce: false })
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await openGame(page)
+    for (const [i, word] of ['kifak', '7abib', 'shway', '5alas', '3aj2a', '2ahwe'].entries()) {
+      await expect(async () => {
+        for (let k = 0; k < 5; k++) await page.keyboard.press('Backspace')
+        await guess(page, word)
+        await expect(page.locator('.row').nth(i).locator('.tile.correct, .tile.present, .tile.absent').first()).toBeVisible({ timeout: 2000 })
+      }).toPass({ timeout: 20_000 })
+    }
+    expect(mock.requests.filter((r) => r.fn === 'submit-guess').length).toBeGreaterThanOrEqual(6)
+  })
+})
+
 test.describe('sharing', () => {
   test('copies a result grid with the number and attempts but never the answer', async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write'])
@@ -320,7 +532,7 @@ test.describe('sharing', () => {
 
     // Windows clipboards store line breaks as CRLF.
     const text = (await page.evaluate(() => navigator.clipboard.readText())).replaceAll('\r\n', '\n')
-    expect(text).toBe(`WordleB #${mock.number} 2/6\n\n⬛⬛⬛⬛⬛\n🟩🟩🟩🟩🟩`)
+    expect(text).toBe(`wordleb #${mock.number} 2/6\n\n⬛⬛⬛⬛⬛\n🟩🟩🟩🟩🟩\n\nhttps://wordleb.com`)
     expect(text.toLowerCase()).not.toContain('5obez')
   })
 })

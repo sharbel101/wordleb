@@ -5,6 +5,7 @@ const fns = {
   'get-daily-puzzle': ['beirut', 'http', 'validate'],
   'submit-guess': ['beirut', 'evaluate', 'validate', 'token', 'turn', 'http'],
   'submit-suggestion': ['http', 'validate'],
+  'get-community-stats': ['beirut', 'community', 'http'],
 }
 const strip = (src) => src.replace(/^import .*$/gm, '').replace(/^export /gm, '')
 for (const [name, shared] of Object.entries(fns)) {

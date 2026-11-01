@@ -104,6 +104,7 @@ export function recordResult(dateKey: string, won: boolean, attempts: number): S
   return next
 }
 
+const PLAYER_KEY = 'wordleb:player'
 const PUZZLE_KEY = 'wordleb:puzzle'
 
 /**
@@ -125,4 +126,28 @@ export function clearCachedPuzzle() {
   } catch {
     /* ignore */
   }
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+let cachedPlayerId: string | null = null
+
+function newUuid(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  const b = crypto.getRandomValues(new Uint8Array(16))
+  b[6] = (b[6] & 0x0f) | 0x40
+  b[8] = (b[8] & 0x3f) | 0x80
+  const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
+/**
+ * A random id made in this browser and kept in localStorage. It identifies nobody (there are no
+ * accounts); the server only uses it so one browser is counted once per day in the community stats.
+ */
+export function getPlayerId(): string {
+  if (cachedPlayerId) return cachedPlayerId
+  const saved = read<string>(PLAYER_KEY)
+  cachedPlayerId = typeof saved === 'string' && UUID_RE.test(saved) ? saved : newUuid()
+  write(PLAYER_KEY, cachedPlayerId)
+  return cachedPlayerId
 }

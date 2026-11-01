@@ -30,6 +30,18 @@ function adminClient() {
   })
 }
 
+/**
+ * Lets slow, non-essential work (like logging) finish after the response has been sent, so it never
+ * delays the player. Supabase Edge Functions provide EdgeRuntime.waitUntil; if it is missing
+ * (e.g. when run locally) the work is simply awaited. Failures are logged, never thrown.
+ */
+async function runInBackground(work: Promise<unknown>): Promise<void> {
+  const guarded = work.catch((err) => console.error('background task failed', err))
+  const runtime = (globalThis as { EdgeRuntime?: { waitUntil(p: Promise<unknown>): void } }).EdgeRuntime
+  if (runtime?.waitUntil) runtime.waitUntil(guarded)
+  else await guarded
+}
+
 // ---- _shared/validate.ts ----
 const WORD_LENGTH = 5
 const MAX_ATTEMPTS = 6
@@ -42,6 +54,13 @@ const CONTROL_RE = /[\u0000-\u001F\u007F]/g
 
 function isValidGuessFormat(value: unknown): value is string {
   return typeof value === 'string' && WORD_RE.test(value)
+}
+
+const PLAYER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** An anonymous random id made in the player's browser (a UUID). Never an account or personal data. */
+function isValidPlayerId(value: unknown): value is string {
+  return typeof value === 'string' && PLAYER_ID_RE.test(value)
 }
 
 function normalizeGuess(value: unknown): string {

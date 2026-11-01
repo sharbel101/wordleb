@@ -49,8 +49,11 @@ describe('formatting helpers', () => {
       'won',
       305,
     )
-    expect(text).toBe('WordleB #305 2/6\n\n⬛🟨⬛⬛⬛\n🟩🟩🟩🟩🟩')
-    expect(buildShareText([['absent', 'absent', 'absent', 'absent', 'absent']], 'lost', 7)).toContain('X/6')
+    expect(text).toBe('wordleb #305 2/6\n\n⬛🟨⬛⬛⬛\n🟩🟩🟩🟩🟩\n\nhttps://wordleb.com')
+    const lost = buildShareText([['absent', 'absent', 'absent', 'absent', 'absent']], 'lost', 7)
+    expect(lost).toContain('X/6')
+    expect(lost.split('\n').at(-1)).toBe('https://wordleb.com') // the link is always the last line
+    expect(lost.startsWith('wordleb #7')).toBe(true) // lowercase, one word
   })
 })
 

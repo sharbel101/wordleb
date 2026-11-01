@@ -20,8 +20,8 @@ function errorMessage(err: unknown): string {
   return 'Something went wrong. Please try again.'
 }
 
-export function SuggestModal({ onClose }: { onClose: () => void }) {
-  const [word, setWord] = useState('')
+export function SuggestModal({ onClose, initialWord = '' }: { onClose: () => void; initialWord?: string }) {
+  const [word, setWord] = useState(initialWord)
   const [meaning, setMeaning] = useState('')
   const [arabic, setArabic] = useState('')
   const [example, setExample] = useState('')

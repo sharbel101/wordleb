@@ -32,6 +32,7 @@
     "e2e",
     "playwright.config.ts",
     "supabase/functions/_shared/token.ts",
-    "supabase/functions/_shared/turn.ts"
+    "supabase/functions/_shared/turn.ts",
+    "supabase/functions/_shared/community.ts"
   ]
 }

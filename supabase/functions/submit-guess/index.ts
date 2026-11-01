@@ -1,8 +1,8 @@
 import { getBeirutDate } from '../_shared/beirut.ts'
-import { adminClient, json, preflight } from '../_shared/http.ts'
+import { adminClient, json, preflight, runInBackground } from '../_shared/http.ts'
 import { issueToken, readToken } from '../_shared/token.ts'
 import { playTurn } from '../_shared/turn.ts'
-import { isValidGuessFormat, normalizeGuess } from '../_shared/validate.ts'
+import { isValidGuessFormat, isValidPlayerId, normalizeGuess } from '../_shared/validate.ts'
 
 const ENFORCE_WORD_LIST = Deno.env.get('ENFORCE_WORD_LIST') === 'true'
 
@@ -47,30 +47,27 @@ Deno.serve(async (req) => {
     }
 
     const db = adminClient()
-    const { data: puzzle, error: puzzleError } = await db
-      .from('daily_puzzles')
-      .select('word')
-      .eq('puzzle_date', today)
-      .maybeSingle()
-    if (puzzleError) throw puzzleError
+    // The puzzle and the "is this an approved word?" lookup are independent, so run them together.
+    const [puzzleResult, knownResult] = await Promise.all([
+      db.from('daily_puzzles').select('word').eq('puzzle_date', today).maybeSingle(),
+      db.from('words').select('word').ilike('word', guess).eq('approved', true).limit(1),
+    ])
+    if (puzzleResult.error) throw puzzleResult.error
+    const puzzle = puzzleResult.data
     if (!puzzle) return json({ error: 'no_puzzle', puzzle_date: today }, 404)
 
     const answer = String(puzzle.word).trim().toLowerCase()
 
-    // Word-list check: OFF until the `words` table is filled. Any well-formed 5-character
-    // guess is scored. Turn it on later with the secret ENFORCE_WORD_LIST=true, after which
-    // guesses must be approved dictionary words (the answer itself is always accepted).
-    if (ENFORCE_WORD_LIST && guess !== answer) {
-      const { data: known, error: wordError } = await db
-        .from('words')
-        .select('word')
-        .ilike('word', guess)
-        .eq('approved', true)
-        .limit(1)
-      if (wordError) throw wordError
-      if (!known || known.length === 0) {
-        return json({ valid: false, reason: 'not_in_list' })
-      }
+    // A guess is "known" if it is the answer or an approved word. If the words lookup itself fails
+    // we do not know, so the game carries on and nothing is flagged or logged.
+    const lookupFailed = !!knownResult.error
+    if (lookupFailed) console.error('words lookup failed', knownResult.error?.message)
+    const known = guess === answer || lookupFailed || (knownResult.data?.length ?? 0) > 0
+
+    // Word-list enforcement: OFF while the dictionary is still being built from play. Turn it on
+    // later with the secret ENFORCE_WORD_LIST=true (the answer itself is always accepted).
+    if (ENFORCE_WORD_LIST && !known) {
+      return json({ valid: false, reason: 'not_in_list' })
     }
 
     const turn = playTurn(guess, answer, previous)
@@ -84,6 +81,8 @@ Deno.serve(async (req) => {
       attempt: turn.attempt,
       won: turn.won,
       lost: turn.lost,
+      // false = not in the dictionary yet, so the game can offer to suggest it.
+      known,
     }
 
     if (turn.won || turn.lost) {
@@ -101,9 +100,36 @@ Deno.serve(async (req) => {
         example_sentence: details?.example_sentence ?? null,
         translation: details?.translation ?? null,
       }
+
+      // Count this finished game once per player per day for the community stats. The attempt
+      // number comes from the signed token, so it cannot be faked. This must never break the
+      // game, so a failure (e.g. the table is not created yet) is only logged.
+      if (isValidPlayerId(body?.player_id)) {
+        const { error: recordError } = await db
+          .from('daily_results')
+          .upsert(
+            { puzzle_date: today, player_id: body.player_id, attempts: turn.won ? turn.attempt : 0 },
+            { onConflict: 'puzzle_date,player_id', ignoreDuplicates: true },
+          )
+        if (recordError) console.error('could not record result', recordError.message)
+      }
     } else {
       // The next guess must present this token; only the server can produce it.
       response.state_token = await issueToken({ d: today, g: [...previous, guess] }, secret)
+    }
+
+    // Remember which unknown words players try, so popular ones can be reviewed and approved.
+    // Anonymous (one random id per browser) and done after the response, so it adds no delay.
+    if (!known && isValidPlayerId(body?.player_id)) {
+      await runInBackground(
+        Promise.resolve(
+          db
+            .from('guess_log')
+            .upsert({ word: guess, player_id: body.player_id }, { onConflict: 'word,player_id', ignoreDuplicates: true }),
+        ).then(({ error }) => {
+          if (error) console.error('could not log guess', error.message)
+        }),
+      )
     }
 
     return json(response)

@@ -11,6 +11,13 @@ export function isValidGuessFormat(value: unknown): value is string {
   return typeof value === 'string' && WORD_RE.test(value)
 }
 
+const PLAYER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** An anonymous random id made in the player's browser (a UUID). Never an account or personal data. */
+export function isValidPlayerId(value: unknown): value is string {
+  return typeof value === 'string' && PLAYER_ID_RE.test(value)
+}
+
 export function normalizeGuess(value: unknown): string {
   return typeof value === 'string' ? value.trim().toLowerCase() : ''
 }

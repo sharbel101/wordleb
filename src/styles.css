@@ -991,3 +991,101 @@ button,
   z-index: 30;
   animation: toast-in 0.2s ease-out;
 }
+
+/* ---------- community stats ---------- */
+
+.community {
+  margin-top: 20px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.community-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.community-head h3 {
+  margin: 14px 0 8px;
+}
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.segmented button {
+  min-height: 32px;
+  padding: 0 12px;
+  background: var(--surface);
+  border: 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.segmented button + button {
+  border-left: 1px solid var(--line-strong);
+}
+
+.segmented button[aria-pressed='true'] {
+  background: var(--text);
+  color: var(--bg);
+}
+
+.community-note {
+  margin: 0 0 8px;
+  color: var(--muted);
+}
+
+.community-note strong {
+  color: var(--text);
+}
+
+.dist-bar.miss {
+  background: var(--red);
+}
+
+/* ---------- "suggest this word" prompt ---------- */
+
+.nudge {
+  position: fixed;
+  top: calc(env(safe-area-inset-top) + var(--header-h) + 108px);
+  left: 12px;
+  right: 12px;
+  margin-inline: auto;
+  width: max-content;
+  max-width: min(440px, calc(100vw - 24px));
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 4px 4px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgb(34 32 30 / 0.15);
+  font-size: 0.85rem;
+  animation: toast-in 0.2s ease-out;
+}
+
+.nudge-action {
+  min-height: 36px;
+  padding: 0 12px;
+  background: var(--green);
+  border: 0;
+  border-radius: var(--radius);
+  color: #fff;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.nudge-close {
+  flex: none;
+  width: 36px;
+  height: 36px;
+}

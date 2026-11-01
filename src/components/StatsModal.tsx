@@ -1,5 +1,6 @@
 import { useCountdown } from '../game/useCountdown'
 import type { Stats } from '../game/storage'
+import { CommunityStats } from './CommunityStats'
 import { Modal } from './Modal'
 import { ShareButton } from './ShareButton'
 
@@ -34,7 +35,7 @@ export function StatsModal({ stats, shareText, highlight, onClose }: Props) {
           ))}
         </div>
 
-        <h3>Guess distribution</h3>
+        <h3>Your guess distribution</h3>
         <div className="dist">
           {stats.distribution.map((count, i) => (
             <div key={i} className="dist-row">
@@ -50,6 +51,8 @@ export function StatsModal({ stats, shareText, highlight, onClose }: Props) {
             </div>
           ))}
         </div>
+
+        <CommunityStats />
 
         <div className="modal-footer">
           <div className="next-word">

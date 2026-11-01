@@ -26,3 +26,15 @@ export function adminClient() {
     auth: { persistSession: false, autoRefreshToken: false },
   })
 }
+
+/**
+ * Lets slow, non-essential work (like logging) finish after the response has been sent, so it never
+ * delays the player. Supabase Edge Functions provide EdgeRuntime.waitUntil; if it is missing
+ * (e.g. when run locally) the work is simply awaited. Failures are logged, never thrown.
+ */
+export async function runInBackground(work: Promise<unknown>): Promise<void> {
+  const guarded = work.catch((err) => console.error('background task failed', err))
+  const runtime = (globalThis as { EdgeRuntime?: { waitUntil(p: Promise<unknown>): void } }).EdgeRuntime
+  if (runtime?.waitUntil) runtime.waitUntil(guarded)
+  else await guarded
+}

@@ -54,6 +54,9 @@ const SHARE_EMOJI: Record<TileState, string> = {
   absent: '⬛',
 }
 
+/** Where shared results point, so anyone who sees one can play. */
+export const SITE_URL = 'https://wordleb.com'
+
 export function buildShareText(
   results: TileState[][],
   status: GameStatus,
@@ -61,7 +64,7 @@ export function buildShareText(
 ): string {
   const score = status === 'won' ? `${results.length}/${MAX_ATTEMPTS}` : `X/${MAX_ATTEMPTS}`
   const rows = results.map((row) => row.map((s) => SHARE_EMOJI[s]).join('')).join('\n')
-  return `WordleB #${puzzleNumber} ${score}\n\n${rows}`
+  return `wordleb #${puzzleNumber} ${score}\n\n${rows}\n\n${SITE_URL}`
 }
 
 /** Screen-reader summary of a scored guess, e.g. "Guess 2: B absent, A present, ...". */
