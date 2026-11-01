@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": [
+      "vite/client",
+      "node"
+    ],
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    "src",
+    "tests",
+    "vite.config.ts",
+    "supabase/functions/_shared/beirut.ts",
+    "supabase/functions/_shared/evaluate.ts",
+    "supabase/functions/_shared/validate.ts",
+    "e2e",
+    "playwright.config.ts",
+    "supabase/functions/_shared/token.ts",
+    "supabase/functions/_shared/turn.ts"
+  ]
+}

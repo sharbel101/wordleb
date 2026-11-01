@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+dist/
+
+# Environment variables (only the placeholder template is committed)
+.env
+.env.*
+!.env.example
+
+# Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local configuration
+.DS_Store
+Thumbs.db
+.claude/
+.netlify/
+supabase/.temp/
+supabase/.branches/
+
+# Test output (traces and screenshots)
+test-results/
+playwright-report/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*

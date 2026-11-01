@@ -1,0 +1,41 @@
+# Netlify configuration. Nothing in this file is secret and it must stay that way:
+# the two environment variables the app needs are set in the Netlify dashboard
+# (Site configuration > Environment variables), never here.
+#
+#   VITE_SUPABASE_URL        https://YOUR-PROJECT-REF.supabase.co
+#   VITE_SUPABASE_ANON_KEY   the anon / publishable key (public by design)
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+  # Vite inlines VITE_* values into the browser bundle by design. Both values below are
+  # public, so Netlify's secrets scanner would otherwise fail the build on them.
+  # NEVER add a real secret (a service-role key, a database password...) to this list.
+  SECRETS_SCAN_OMIT_KEYS = "VITE_SUPABASE_URL,VITE_SUPABASE_ANON_KEY"
+
+# Single-page app: every path serves the game.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=()"
+    # Scripts only from this site; network calls only to this site and Supabase.
+    # style-src needs 'unsafe-inline' because React sets per-tile CSS variables inline.
+    # If you use a custom Supabase domain, add it to connect-src.
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+
+# Hashed build assets never change, so they can be cached for a year.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
