@@ -2,7 +2,7 @@ import { getBeirutDate } from '../_shared/beirut.ts'
 import { adminClient, json, preflight, runInBackground } from '../_shared/http.ts'
 import { issueToken, readToken } from '../_shared/token.ts'
 import { playTurn } from '../_shared/turn.ts'
-import { isValidGuessFormat, isValidPlayerId, normalizeGuess } from '../_shared/validate.ts'
+import { isPastPuzzleDate, isValidGuessFormat, isValidPlayerId, normalizeGuess } from '../_shared/validate.ts'
 
 const ENFORCE_WORD_LIST = Deno.env.get('ENFORCE_WORD_LIST') === 'true'
 
@@ -31,8 +31,14 @@ Deno.serve(async (req) => {
     }
 
     const today = getBeirutDate()
+    // Today's puzzle by default. A past puzzle is served only when the client explicitly asks for
+    // it with `archive: true`; otherwise a stale date still means "the puzzle changed", as before.
+    let puzzleDate = today
     if (typeof body?.puzzle_date === 'string' && body.puzzle_date !== today) {
-      return json({ error: 'puzzle_changed', puzzle_date: today }, 409)
+      if (body.archive !== true || !isPastPuzzleDate(body.puzzle_date, today)) {
+        return json({ error: 'puzzle_changed', puzzle_date: today }, 409)
+      }
+      puzzleDate = body.puzzle_date
     }
 
     // No token means "first guess of the day". A token that is forged, edited or from
@@ -40,7 +46,7 @@ Deno.serve(async (req) => {
     let previous: string[] = []
     if (body?.state_token !== undefined && body?.state_token !== null) {
       const state = await readToken(body.state_token, secret)
-      if (!state || state.d !== today) {
+      if (!state || state.d !== puzzleDate) {
         return json({ error: 'bad_state', message: 'Your game session is no longer valid.' }, 400)
       }
       previous = state.g
@@ -49,12 +55,12 @@ Deno.serve(async (req) => {
     const db = adminClient()
     // The puzzle and the "is this an approved word?" lookup are independent, so run them together.
     const [puzzleResult, knownResult] = await Promise.all([
-      db.from('daily_puzzles').select('word').eq('puzzle_date', today).maybeSingle(),
+      db.from('daily_puzzles').select('word').eq('puzzle_date', puzzleDate).maybeSingle(),
       db.from('words').select('word').ilike('word', guess).eq('approved', true).limit(1),
     ])
     if (puzzleResult.error) throw puzzleResult.error
     const puzzle = puzzleResult.data
-    if (!puzzle) return json({ error: 'no_puzzle', puzzle_date: today }, 404)
+    if (!puzzle) return json({ error: 'no_puzzle', puzzle_date: puzzleDate }, 404)
 
     const answer = String(puzzle.word).trim().toLowerCase()
 
@@ -103,19 +109,20 @@ Deno.serve(async (req) => {
 
       // Count this finished game once per player per day for the community stats. The attempt
       // number comes from the signed token, so it cannot be faked. This must never break the
-      // game, so a failure (e.g. the table is not created yet) is only logged.
-      if (isValidPlayerId(body?.player_id)) {
+      // game, so a failure (e.g. the table is not created yet) is only logged. Replays of past
+      // puzzles are not counted: the community numbers are for the day itself.
+      if (puzzleDate === today && isValidPlayerId(body?.player_id)) {
         const { error: recordError } = await db
           .from('daily_results')
           .upsert(
-            { puzzle_date: today, player_id: body.player_id, attempts: turn.won ? turn.attempt : 0 },
+            { puzzle_date: puzzleDate, player_id: body.player_id, attempts: turn.won ? turn.attempt : 0 },
             { onConflict: 'puzzle_date,player_id', ignoreDuplicates: true },
           )
         if (recordError) console.error('could not record result', recordError.message)
       }
     } else {
       // The next guess must present this token; only the server can produce it.
-      response.state_token = await issueToken({ d: today, g: [...previous, guess] }, secret)
+      response.state_token = await issueToken({ d: puzzleDate, g: [...previous, guess] }, secret)
     }
 
     // Remember which unknown words players try, so popular ones can be reviewed and approved.

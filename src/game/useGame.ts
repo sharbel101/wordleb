@@ -15,10 +15,12 @@ import {
   getPlayerId,
   loadCachedPuzzle,
   loadGame,
+  loadPastGame,
   loadStats,
   recordResult,
   saveCachedPuzzle,
   saveGame,
+  savePastGame,
 } from './storage'
 import type { AnswerInfo, Puzzle } from './types'
 import { validateGuess } from './validateGuess'
@@ -58,6 +60,8 @@ export function useGame(inputEnabled: boolean) {
   const [loadState, setLoadState] = useState<LoadState>({ kind: 'loading' })
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [puzzle, setPuzzle] = useState<Puzzle | null>(null)
+  /** null = today's puzzle; a date = replaying that past puzzle. */
+  const [viewDate, setViewDate] = useState<string | null>(null)
 
   const [guesses, setGuesses] = useState<string[]>([])
   const [results, setResults] = useState<TileState[][]>([])
@@ -81,6 +85,8 @@ export function useGame(inputEnabled: boolean) {
   /** Synchronous guard: state updates are async, so two quick Enters could both pass `canType`. */
   const inFlight = useRef(false)
   const loadedAt = useRef(Date.now())
+  /** The puzzle on screen. A slow response or timer for a puzzle we have since left must not touch the board. */
+  const activeDate = useRef<string | null>(null)
 
   useEffect(() => {
     const pending = timers.current
@@ -100,13 +106,17 @@ export function useGame(inputEnabled: boolean) {
     [later],
   )
 
-  // Load today's puzzle (Beirut date) and restore local progress.
+  // Load the puzzle on screen (today's, or a past one being replayed) and restore local progress.
   useEffect(() => {
     let cancelled = false
     const today = getBeirutDate()
 
     function start(p: Puzzle) {
-      const saved = loadGame(p.puzzleDate)
+      const saved = viewDate ? loadPastGame(p.puzzleDate) : loadGame(p.puzzleDate)
+      activeDate.current = p.puzzleDate
+      setUnknownGuess(null)
+      setAnnouncement('')
+      setStats(loadStats())
       setPuzzle(p)
       setGuesses(saved?.guesses ?? [])
       setResults(saved?.results ?? [])
@@ -118,6 +128,12 @@ export function useGame(inputEnabled: boolean) {
       setCurrent('')
       loadedAt.current = Date.now()
       setLoadState({ kind: 'ready' })
+    }
+
+    // A past puzzle needs no lookup: its number follows from its date, and the server checks the rest.
+    if (viewDate) {
+      start({ puzzleDate: viewDate, puzzleNumber: puzzleNumberFor(viewDate) })
+      return
     }
 
     // Same-day reloads skip the network entirely (the metadata is not secret).
@@ -149,7 +165,7 @@ export function useGame(inputEnabled: boolean) {
     return () => {
       cancelled = true
     }
-  }, [loadAttempt, showToast])
+  }, [loadAttempt, viewDate, showToast])
 
   const retry = useCallback(() => setLoadAttempt((n) => n + 1), [])
 
@@ -163,8 +179,9 @@ export function useGame(inputEnabled: boolean) {
 
   // A tab left open past Beirut midnight must not keep playing yesterday's puzzle.
   const puzzleDate = puzzle?.puzzleDate
+  const archive = viewDate !== null
   useEffect(() => {
-    if (!puzzleDate) return
+    if (!puzzleDate || archive) return
     function check() {
       const stale = getBeirutDate() > puzzleDate!
       // The 60s guard stops a badly wrong device clock from reloading on every tab switch.
@@ -178,7 +195,7 @@ export function useGame(inputEnabled: boolean) {
       document.removeEventListener('visibilitychange', check)
       window.removeEventListener('focus', check)
     }
-  }, [puzzleDate])
+  }, [puzzleDate, archive])
 
   const revealing = revealedCount < guesses.length
   const canType = inputEnabled && loadState.kind === 'ready' && status === 'playing' && !revealing && !submitting
@@ -205,8 +222,8 @@ export function useGame(inputEnabled: boolean) {
     [showToast],
   )
 
-  /** Discards today's local progress (never statistics) and starts the puzzle over. */
-  const resetToday = useCallback((dateKey: string) => {
+  /** Discards this puzzle's local progress (never statistics) and starts it over. */
+  const resetGame = useCallback((dateKey: string, past: boolean) => {
     setGuesses([])
     setResults([])
     setStatus('playing')
@@ -214,7 +231,9 @@ export function useGame(inputEnabled: boolean) {
     setStateToken(null)
     setRevealedCount(0)
     setCurrent('')
-    saveGame({ dateKey, guesses: [], results: [], status: 'playing', answer: null, stateToken: null })
+    const blank = { dateKey, guesses: [], results: [], status: 'playing' as const, answer: null, stateToken: null }
+    if (past) savePastGame(blank)
+    else saveGame(blank)
   }, [])
 
   const submit = useCallback(async () => {
@@ -225,15 +244,22 @@ export function useGame(inputEnabled: boolean) {
     if (!check.valid) return reject(check.error)
     const guess = check.normalizedGuess.toLowerCase()
 
+    const dateAtSubmit = puzzle.puzzleDate
+    const past = archive
+    const stillHere = () => activeDate.current === dateAtSubmit
+
     inFlight.current = true
     setSubmitting(true)
     try {
       const res = await submitGuess({
         guess,
         stateToken,
-        puzzleDate: puzzle.puzzleDate,
+        puzzleDate: dateAtSubmit,
+        archive: past,
         playerId: getPlayerId(),
       })
+      // The player moved to another puzzle while this was in flight: leave the board alone.
+      if (!stillHere()) return
       // Not an approved word: no attempt is spent and the row stays editable.
       if (!res.valid) return reject('Not in word list')
 
@@ -249,33 +275,37 @@ export function useGame(inputEnabled: boolean) {
       setAnswer(nextAnswer)
       setStateToken(nextToken)
       setCurrent('')
-      saveGame({
-        dateKey: puzzle.puzzleDate,
+      const saved = {
+        dateKey: dateAtSubmit,
         guesses: nextGuesses,
         results: nextResults,
         status: nextStatus,
         answer: nextAnswer,
         stateToken: nextToken,
-      })
+      }
+      if (past) savePastGame(saved)
+      else saveGame(saved)
 
       // Persist stats now (survives a refresh mid-animation) but show them after the reveal.
-      const nextStats =
-        nextStatus === 'playing' ? null : recordResult(puzzle.puzzleDate, nextStatus === 'won', nextGuesses.length)
+      // Replaying a past puzzle never touches streaks or totals.
+      const finishedNow = nextStatus !== 'playing'
+      const nextStats = finishedNow && !past ? recordResult(dateAtSubmit, nextStatus === 'won', nextGuesses.length) : null
 
       // Offer to suggest the word once its tiles have been revealed, and tidy the prompt away later.
       if (!res.known) {
-        later(() => setUnknownGuess(guess), revealDelay())
+        later(() => stillHere() && setUnknownGuess(guess), revealDelay())
         later(() => setUnknownGuess((g) => (g === guess ? null : g)), revealDelay() + 10_000)
       }
 
       later(() => {
+        if (!stillHere()) return
         setRevealedCount(nextGuesses.length)
         const summary = describeGuess(guess, res.result, nextGuesses.length)
-        if (!nextStats) {
+        if (!finishedNow) {
           setAnnouncement(summary)
           return
         }
-        setStats(nextStats)
+        if (nextStats) setStats(nextStats)
         setAnnouncement(
           nextStatus === 'won'
             ? `${summary} You solved it in ${nextGuesses.length} ${nextGuesses.length === 1 ? 'try' : 'tries'}.`
@@ -292,12 +322,12 @@ export function useGame(inputEnabled: boolean) {
         showToast('A new puzzle is ready. Refreshing...', 2500)
         later(() => window.location.reload(), 1500)
       } else if (err instanceof ApiError && err.kind === 'bad_state') {
-        // The saved session can no longer be verified (e.g. it predates an update). Start today's
+        // The saved session can no longer be verified (e.g. it predates an update). Start this
         // puzzle over rather than leave the player stuck; finished games never reach this path.
-        resetToday(puzzle.puzzleDate)
-        showToast('Your saved game could not be resumed. Starting today over.', 3500)
+        resetGame(dateAtSubmit, past)
+        showToast('Your saved game could not be resumed. Starting over.', 3500)
       } else if (err instanceof ApiError && err.kind === 'no_puzzle') {
-        showToast("Today's puzzle isn't available right now.", 2500)
+        showToast("That puzzle isn't available right now.", 2500)
       } else {
         showToast("Couldn't reach the server. Try again.", 2500)
       }
@@ -305,7 +335,7 @@ export function useGame(inputEnabled: boolean) {
       inFlight.current = false
       setSubmitting(false)
     }
-  }, [canType, puzzle, current, guesses, results, answer, stateToken, reject, later, showToast, resetToday])
+  }, [canType, puzzle, archive, current, guesses, results, answer, stateToken, reject, later, showToast, resetGame])
 
   const submitNow = useCallback(() => void submit(), [submit])
 
@@ -336,6 +366,13 @@ export function useGame(inputEnabled: boolean) {
     loadState,
     retry,
     puzzle,
+    /** True while replaying a past puzzle (it does not count towards streaks or stats). */
+    archive,
+    /** Switch to a past puzzle by date, or back to today with null. Ignored while a guess is being scored. */
+    playDate: (date: string | null) => {
+      if (inFlight.current) return
+      setViewDate(date)
+    },
     answer,
     guesses,
     results,

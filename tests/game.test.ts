@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildShareText, formatCountdown, getKeyStates, isWellFormedGuess } from '../src/game/logic'
-import { loadGame, loadStats, recordResult, saveGame } from '../src/game/storage'
+import { loadGame, loadPastGame, loadStats, recordResult, saveGame, savePastGame } from '../src/game/storage'
 
 function stubLocalStorage() {
   const store = new Map<string, string>()
@@ -72,6 +72,23 @@ describe('local persistence', () => {
     // A finished game legitimately has no token and must still restore.
     saveGame({ dateKey: '2026-11-01', guesses: ['5obez'], results: [['correct', 'correct', 'correct', 'correct', 'correct']], status: 'won', answer: { word: '5obez', meaning: null, arabic: null, example: null, translation: null }, stateToken: null })
     expect(loadGame('2026-11-01')?.status).toBe('won')
+  })
+
+  it('keeps replays of past days apart from today, one per date', () => {
+    const lost = { guesses: ['yalla'], results: [['absent', 'absent', 'absent', 'absent', 'absent']] as const, status: 'lost' as const, answer: null, stateToken: null }
+    saveGame({ dateKey: '2026-11-04', guesses: [], results: [], status: 'playing', answer: null, stateToken: null })
+    savePastGame({ dateKey: '2026-11-02', ...lost, results: [[...lost.results[0]]] })
+    savePastGame({ dateKey: '2026-11-03', ...lost, results: [[...lost.results[0]]], status: 'playing', stateToken: 'tok.sig' })
+    expect(loadPastGame('2026-11-02')?.status).toBe('lost')
+    expect(loadPastGame('2026-11-03')?.status).toBe('playing')
+    expect(loadPastGame('2026-11-01')).toBeNull()
+    expect(loadGame('2026-11-04')?.guesses).toEqual([]) // today's slot is untouched
+    expect(loadGame('2026-11-02')).toBeNull()
+  })
+
+  it('finds a past day that was played live and still sits in the main slot', () => {
+    saveGame({ dateKey: '2026-11-03', guesses: ['5obez'], results: [['correct', 'correct', 'correct', 'correct', 'correct']], status: 'won', answer: null, stateToken: null })
+    expect(loadPastGame('2026-11-03')?.status).toBe('won')
   })
 
   it('ignores corrupted saves', () => {

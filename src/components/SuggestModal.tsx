@@ -21,10 +21,8 @@ function errorMessage(err: unknown): string {
 }
 
 export function SuggestModal({ onClose, initialWord = '' }: { onClose: () => void; initialWord?: string }) {
-  const [word, setWord] = useState(initialWord)
-  const [meaning, setMeaning] = useState('')
-  const [arabic, setArabic] = useState('')
-  const [example, setExample] = useState('')
+  // Never more than five characters, however the text arrives (typing, paste, autocorrect, voice).
+  const [word, setWord] = useState(initialWord.slice(0, WORD_LENGTH))
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [sent, setSent] = useState(false)
@@ -37,19 +35,10 @@ export function SuggestModal({ onClose, initialWord = '' }: { onClose: () => voi
       setError(`Use exactly ${WORD_LENGTH} characters: letters a-z or the digits ${ARABIZI_DIGITS.join(', ')}.`)
       return
     }
-    if (meaning.trim().length < 2) {
-      setError('Please tell us what the word means.')
-      return
-    }
 
     setBusy(true)
     try {
-      await submitSuggestion({
-        word: clean,
-        meaning: meaning.trim(),
-        arabicSpelling: arabic.trim(),
-        exampleSentence: example.trim(),
-      })
+      await submitSuggestion({ word: clean })
       setSent(true)
     } catch (err) {
       setError(errorMessage(err))
@@ -73,13 +62,14 @@ export function SuggestModal({ onClose, initialWord = '' }: { onClose: () => voi
         </div>
       ) : (
         <form className="modal-body form" onSubmit={onSubmit} noValidate>
-          <p>Know a great Lebanese word? Tell us how you&apos;d write it in Arabizi.</p>
+          <p>Know a great Lebanese word? Type how you&apos;d write it in Arabizi. That&apos;s all we need.</p>
           <label>
             Word ({WORD_LENGTH} characters)
             <input
               value={word}
               onChange={(e) => {
-                setWord(e.target.value)
+                // maxLength alone is not enough: some mobile keyboards insert past it.
+                setWord(e.target.value.slice(0, WORD_LENGTH))
                 setError('')
               }}
               maxLength={WORD_LENGTH}
@@ -91,41 +81,6 @@ export function SuggestModal({ onClose, initialWord = '' }: { onClose: () => voi
               aria-describedby={error ? 'suggest-error' : undefined}
             />
           </label>
-          <label>
-            Meaning
-            <input
-              value={meaning}
-              onChange={(e) => {
-                setMeaning(e.target.value)
-                setError('')
-              }}
-              maxLength={200}
-              placeholder="What does it mean?"
-              autoComplete="off"
-            />
-          </label>
-          <label>
-            Arabic spelling (optional)
-            <input
-              value={arabic}
-              onChange={(e) => setArabic(e.target.value)}
-              maxLength={40}
-              lang="ar"
-              dir="rtl"
-              placeholder="يلا"
-              autoComplete="off"
-            />
-          </label>
-          <label>
-            Example sentence (optional)
-            <textarea
-              value={example}
-              onChange={(e) => setExample(e.target.value)}
-              maxLength={200}
-              rows={2}
-              placeholder="Use it in a sentence"
-            />
-          </label>
           {error && (
             <p id="suggest-error" className="form-error" role="alert">
               {error}
@@ -133,7 +88,7 @@ export function SuggestModal({ onClose, initialWord = '' }: { onClose: () => voi
           )}
           <div className="modal-footer">
             <button type="submit" className="btn btn-primary" disabled={busy}>
-              {busy ? 'Sending...' : 'Send suggestion'}
+              {busy ? 'Sending...' : 'Suggest it'}
             </button>
           </div>
         </form>

@@ -6,6 +6,7 @@ import { Keyboard } from './components/Keyboard'
 import { StatusPanel } from './components/StatusPanel'
 import { Toast } from './components/Toast'
 import { WordNudge } from './components/WordNudge'
+import { ArchiveModal } from './components/ArchiveModal'
 import { buildShareText } from './game/logic'
 import { useGame } from './game/useGame'
 
@@ -15,7 +16,7 @@ const StatsModal = lazy(() => import('./components/StatsModal').then((m) => ({ d
 const ResultModal = lazy(() => import('./components/ResultModal').then((m) => ({ default: m.ResultModal })))
 const SuggestModal = lazy(() => import('./components/SuggestModal').then((m) => ({ default: m.SuggestModal })))
 
-type ModalName = 'help' | 'stats' | 'suggest' | 'result' | null
+type ModalName = 'help' | 'stats' | 'suggest' | 'archive' | 'result' | null
 
 const SEEN_HELP_KEY = 'wordleb:seen-help'
 
@@ -25,6 +26,12 @@ function hasSeenHelp(): boolean {
   } catch {
     return true
   }
+}
+
+const shortDateFormat = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+
+function shortDate(dateKey: string): string {
+  return shortDateFormat.format(new Date(`${dateKey}T00:00:00Z`))
 }
 
 export default function App() {
@@ -63,6 +70,7 @@ export default function App() {
     <div className="app">
       <Header
         onHelp={() => setModal('help')}
+        onArchive={() => setModal('archive')}
         onStats={() => setModal('stats')}
         onSuggest={() => {
           setSuggestSeed('')
@@ -74,6 +82,11 @@ export default function App() {
         puzzleNumber={game.puzzle?.puzzleNumber ?? null}
         finished={finished && game.settled}
         onViewResult={() => setModal('result')}
+        past={
+          game.archive && game.puzzle
+            ? { label: shortDate(game.puzzle.puzzleDate), onBackToToday: () => game.playDate(null) }
+            : null
+        }
       />
       <Toast toast={game.toast} />
       {game.unknownGuess && modal === null && (
@@ -129,12 +142,22 @@ export default function App() {
 
       <Suspense fallback={null}>
       {modal === 'help' && <HowToPlayModal onClose={closeModal} />}
+      {modal === 'archive' && (
+        <ArchiveModal
+          current={game.archive ? (game.puzzle?.puzzleDate ?? null) : null}
+          onPick={(date) => {
+            game.playDate(date)
+            closeModal()
+          }}
+          onClose={closeModal}
+        />
+      )}
       {modal === 'suggest' && <SuggestModal onClose={closeModal} initialWord={suggestSeed} />}
       {modal === 'stats' && (
         <StatsModal
           stats={game.stats}
           shareText={shareText}
-          highlight={game.status === 'won' ? game.guesses.length : null}
+          highlight={game.status === 'won' && !game.archive ? game.guesses.length : null}
           onClose={closeModal}
         />
       )}

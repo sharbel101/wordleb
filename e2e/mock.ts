@@ -14,6 +14,9 @@ export interface MockState {
   date: string
   number: number
   answer: string
+  /** Past days the archive offers, newest first (dates only). Their answer is `pastAnswer`. */
+  past: string[]
+  pastAnswer: string
   words: Set<string>
   /** Every request the app made, for asserting that nothing extra was sent. */
   requests: { fn: string; body: Record<string, unknown> }[]
@@ -43,6 +46,11 @@ const CORS = {
 /** Wrong-but-valid words that pass both the local validator and the mock dictionary. */
 export const WRONG_WORDS = ['yalla', 'kifak', 'ba7ar', 'shams', 'habib', 'eerie']
 
+function dayBefore(dateKey: string, n: number): string {
+  const [y, m, d] = dateKey.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d - n)).toISOString().slice(0, 10)
+}
+
 /**
  * Stands in for the three Edge Functions with the same behaviour as the real ones
  * (it reuses the real scoring code), so the whole app can be exercised offline.
@@ -55,6 +63,8 @@ export async function mockSupabase(page: Page, overrides: Partial<MockState> = {
     date,
     number: puzzleNumberFor(date),
     answer: '5obez',
+    past: [dayBefore(date, 1), dayBefore(date, 2)],
+    pastAnswer: 'kteer',
     words: new Set(['5obez', 'kteer', 'yalla', 'kifak', 'ba7ar', 'shams', 'habib', 'eerie', '7elou']),
     requests: [],
     guessDelayMs: 0,
@@ -76,6 +86,13 @@ export async function mockSupabase(page: Page, overrides: Partial<MockState> = {
     const body = (request.postDataJSON() ?? {}) as Record<string, unknown>
     state.requests.push({ fn, body })
 
+    if (fn === 'get-daily-puzzle' && body.list === true) {
+      return json(route, 200, {
+        today: state.date,
+        puzzles: state.past.map((d) => ({ puzzle_date: d, puzzle_number: puzzleNumberFor(d) })),
+      })
+    }
+
     if (fn === 'get-daily-puzzle') {
       if (state.puzzleMode === 'offline') return route.abort('connectionfailed')
       if (state.puzzleMode === 'down') return json(route, 500, { error: 'server_error' })
@@ -89,17 +106,24 @@ export async function mockSupabase(page: Page, overrides: Partial<MockState> = {
       if (state.guessMode === 'down') return json(route, 500, { error: 'server_error' })
 
       const guess = String(body.guess)
+      // Same rule as the real function: another date is only served as a replay of a listed past day.
+      let day = state.date
+      let answer = state.answer
       if (body.puzzle_date && body.puzzle_date !== state.date) {
-        return json(route, 409, { error: 'puzzle_changed', puzzle_date: state.date })
+        if (body.archive !== true || !state.past.includes(String(body.puzzle_date))) {
+          return json(route, 409, { error: 'puzzle_changed', puzzle_date: state.date })
+        }
+        day = String(body.puzzle_date)
+        answer = state.pastAnswer
       }
       // Same rule as the real function: history comes only from a genuine signed token.
       let previous: string[] = []
       if (body.state_token) {
         const saved = await readToken(body.state_token, TEST_SECRET)
-        if (!saved || saved.d !== state.date) return json(route, 400, { error: 'bad_state' })
+        if (!saved || saved.d !== day) return json(route, 400, { error: 'bad_state' })
         previous = saved.g
       }
-      const known = guess === state.answer || state.words.has(guess)
+      const known = guess === answer || state.words.has(guess)
       if (!known && state.enforce) return json(route, 200, { valid: false })
       if (!known && isValidPlayerId(body.player_id)) {
         const players = state.unknownLog.get(guess) ?? new Set<string>()
@@ -107,20 +131,22 @@ export async function mockSupabase(page: Page, overrides: Partial<MockState> = {
         state.unknownLog.set(guess, players)
       }
 
-      const turn = playTurn(guess, state.answer, previous)
+      const turn = playTurn(guess, answer, previous)
       if ('error' in turn) return json(route, 400, { error: 'game_over' })
       const res: Record<string, unknown> = { valid: true, ...turn, known }
       if (turn.won || turn.lost) {
-        res.answer = { word: state.answer, ...ANSWER_DETAILS }
+        res.answer = { word: answer, ...ANSWER_DETAILS }
         // Same rule as the real function: one result per player per day, the first one wins.
         const key = `${state.date}|${body.player_id}`
-        if (isValidPlayerId(body.player_id) && !state.community.has(key)) {
+        if (day === state.date && isValidPlayerId(body.player_id) && !state.community.has(key)) {
           state.community.set(key, turn.won ? turn.attempt : 0)
         }
       }
-      else res.state_token = await issueToken({ d: state.date, g: [...previous, guess] }, TEST_SECRET)
+      else res.state_token = await issueToken({ d: day, g: [...previous, guess] }, TEST_SECRET)
       return json(route, 200, res)
     }
+
+    if (fn === 'submit-suggestion') return json(route, 200, { ok: true })
 
     if (fn === 'get-community-stats') {
       if (state.statsMode === 'down') return json(route, 500, { error: 'server_error' })

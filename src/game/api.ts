@@ -76,6 +76,12 @@ export async function getDailyPuzzle(): Promise<Puzzle> {
   return { puzzleDate: data.puzzle_date, puzzleNumber: data.puzzle_number }
 }
 
+/** Dates of past puzzles that can be replayed, newest first. Never includes today or any word. */
+export async function getPastPuzzles(): Promise<Puzzle[]> {
+  const data = await post<{ puzzles: { puzzle_date: string; puzzle_number: number }[] }>('get-daily-puzzle', { list: true })
+  return data.puzzles.map((p) => ({ puzzleDate: p.puzzle_date, puzzleNumber: p.puzzle_number }))
+}
+
 interface RawAnswer {
   word: string
   meaning: string | null
@@ -107,6 +113,8 @@ export async function submitGuess(args: {
   guess: string
   stateToken: string | null
   puzzleDate: string
+  /** True when replaying a past puzzle instead of today's. */
+  archive?: boolean
   /** Anonymous random id, used only so each player is counted once in the community stats. */
   playerId: string
 }): Promise<GuessResponse> {
@@ -125,6 +133,7 @@ export async function submitGuess(args: {
     guess: args.guess,
     ...(args.stateToken ? { state_token: args.stateToken } : {}),
     puzzle_date: args.puzzleDate,
+    ...(args.archive ? { archive: true } : {}),
     player_id: args.playerId,
   })
   if (!data.valid) return { valid: false }
@@ -150,18 +159,10 @@ export async function submitGuess(args: {
 
 export interface SuggestionFields {
   word: string
-  meaning: string
-  arabicSpelling: string
-  exampleSentence: string
 }
 
 export async function submitSuggestion(fields: SuggestionFields): Promise<void> {
-  await post('submit-suggestion', {
-    word: fields.word,
-    meaning: fields.meaning,
-    arabic_spelling: fields.arabicSpelling,
-    example_sentence: fields.exampleSentence,
-  })
+  await post('submit-suggestion', { word: fields.word })
 }
 
 export interface CommunityBucket {

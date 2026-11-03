@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, getCommunityStats, getDailyPuzzle, submitGuess, submitSuggestion } from '../src/game/api'
+import { ApiError, getCommunityStats, getDailyPuzzle, getPastPuzzles, submitGuess, submitSuggestion } from '../src/game/api'
 
 const PLAYER = '0b8f3a52-5c1e-4d6a-9f27-3e1a7c9d4b10'
 
@@ -17,6 +17,25 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
+})
+
+describe('past puzzles', () => {
+  it('asks for the list and maps it, newest first', async () => {
+    const fetchFn = mockFetch(200, { today: '2026-11-04', puzzles: [{ puzzle_date: '2026-11-03', puzzle_number: 307 }, { puzzle_date: '2026-11-02', puzzle_number: 306 }] })
+    await expect(getPastPuzzles()).resolves.toEqual([
+      { puzzleDate: '2026-11-03', puzzleNumber: 307 },
+      { puzzleDate: '2026-11-02', puzzleNumber: 306 },
+    ])
+    expect(JSON.parse(fetchFn.mock.calls[0][1].body)).toEqual({ list: true })
+  })
+
+  it('marks a replay with archive: true, and leaves the flag off for today', async () => {
+    const fetchFn = mockFetch(200, { valid: false })
+    await submitGuess({ guess: 'yalla', stateToken: null, puzzleDate: '2026-11-02', archive: true, playerId: PLAYER })
+    expect(JSON.parse(fetchFn.mock.calls[0][1].body)).toMatchObject({ puzzle_date: '2026-11-02', archive: true })
+    await submitGuess({ guess: 'yalla', stateToken: null, puzzleDate: '2026-11-04', playerId: PLAYER })
+    expect(JSON.parse(fetchFn.mock.calls[1][1].body)).not.toHaveProperty('archive')
+  })
 })
 
 describe('api client', () => {
@@ -110,7 +129,7 @@ describe('api client', () => {
 
   it('surfaces suggestion errors with the server message', async () => {
     mockFetch(429, { error: 'rate_limited', message: 'Slow down' })
-    const err = await submitSuggestion({ word: 'yalla', meaning: 'x', arabicSpelling: '', exampleSentence: '' }).catch((e) => e)
+    const err = await submitSuggestion({ word: 'yalla' }).catch((e) => e)
     expect(err).toMatchObject({ kind: 'rate_limited', message: 'Slow down' })
   })
 })

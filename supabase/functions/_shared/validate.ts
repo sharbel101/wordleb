@@ -11,6 +11,15 @@ export function isValidGuessFormat(value: unknown): value is string {
   return typeof value === 'string' && WORD_RE.test(value)
 }
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+/** A real calendar date (YYYY-MM-DD) that is strictly before `today`: the only dates the archive may serve. */
+export function isPastPuzzleDate(value: unknown, today: string): value is string {
+  if (typeof value !== 'string' || !DATE_RE.test(value)) return false
+  const parsed = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value && value < today
+}
+
 const PLAYER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** An anonymous random id made in the player's browser (a UUID). Never an account or personal data. */
@@ -24,7 +33,7 @@ export function normalizeGuess(value: unknown): string {
 
 export interface SuggestionInput {
   word: string
-  meaning: string
+  meaning: string | null
   arabic_spelling: string | null
   example_sentence: string | null
 }
@@ -45,10 +54,10 @@ export function validateSuggestion(input: unknown): SuggestionCheck {
   const example = cleanText(body.example_sentence)
 
   if (!isValidGuessFormat(word)) {
-    return { ok: false, message: 'The word must be exactly 5 characters: letters a-z or the digits 2, 3, 5, 6, 7, 8, 9.' }
+    return { ok: false, message: 'The word must be exactly 5 characters: letters a-z or the digits 2, 3, 5, 7, 8.' }
   }
-  if (meaning.length < 2 || meaning.length > 200) {
-    return { ok: false, message: 'Please add a meaning (2 to 200 characters).' }
+  if (meaning.length > 200) {
+    return { ok: false, message: 'The meaning is too long (200 characters max).' }
   }
   if (arabic && (arabic.length > 40 || !ARABIC_RE.test(arabic))) {
     return { ok: false, message: 'The Arabic spelling must use Arabic letters only (up to 40 characters).' }
@@ -61,7 +70,7 @@ export function validateSuggestion(input: unknown): SuggestionCheck {
     ok: true,
     value: {
       word,
-      meaning,
+      meaning: meaning || null,
       arabic_spelling: arabic || null,
       example_sentence: example || null,
     },

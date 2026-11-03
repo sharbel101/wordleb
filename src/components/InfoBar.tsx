@@ -6,9 +6,11 @@ interface Props {
   puzzleNumber: number | null
   finished: boolean
   onViewResult: () => void
+  /** Set while replaying a past puzzle: its date label, and a way back to today's. */
+  past: { label: string; onBackToToday: () => void } | null
 }
 
-export function InfoBar({ attemptsLeft, puzzleNumber, finished, onViewResult }: Props) {
+export function InfoBar({ attemptsLeft, puzzleNumber, finished, onViewResult, past }: Props) {
   const countdown = useCountdown()
   const used = MAX_ATTEMPTS - attemptsLeft
 
@@ -35,9 +37,20 @@ export function InfoBar({ attemptsLeft, puzzleNumber, finished, onViewResult }: 
         </span>
       </div>
       <div className="info-block info-block-end">
-        <span className="info-label">{puzzleNumber ? `No. ${puzzleNumber}` : ' '}</span>
         <span className="info-label">
-          Next word <time className="countdown">{countdown}</time>
+          {puzzleNumber ? `No. ${puzzleNumber}` : '\u00a0'}
+          {past && <span className="info-past"> · {past.label}</span>}
+        </span>
+        <span className="info-label">
+          {past ? (
+            <button className="link-btn" onClick={past.onBackToToday}>
+              Back to today
+            </button>
+          ) : (
+            <>
+              Next word <time className="countdown">{countdown}</time>
+            </>
+          )}
         </span>
       </div>
     </div>

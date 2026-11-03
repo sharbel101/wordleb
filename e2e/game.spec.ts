@@ -516,6 +516,45 @@ test.describe('growing the word list from play', () => {
   })
 })
 
+test.describe('suggestion form', () => {
+  test('only the word is needed: one tap on Suggest it sends it', async ({ page }) => {
+    const mock = await mockSupabase(page)
+    await openGame(page)
+    await page.getByRole('button', { name: 'Suggest a word' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Suggest a word' })
+    await expect(dialog.locator('input, textarea')).toHaveCount(1)
+    await dialog.getByLabel('Word (5 characters)').fill('mnaqo')
+    await dialog.getByRole('button', { name: 'Suggest it' }).click()
+    await expect(dialog).toContainText('MNAQO is on the list')
+    expect(mock.requests.filter((r) => r.fn === 'submit-suggestion').map((r) => r.body.word)).toEqual(['mnaqo'])
+  })
+
+  test('the word never exceeds five characters, however it is entered', async ({ page }) => {
+    const mock = await mockSupabase(page)
+    await openGame(page)
+    await page.getByRole('button', { name: 'Suggest a word' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Suggest a word' })
+    const word = dialog.getByLabel('Word (5 characters)')
+
+    await word.pressSequentially('abcdefgh') // typing
+    await expect(word).toHaveValue('abcde')
+    await word.fill('qwertyuiop') // paste or a keyboard that ignores maxlength: set the value directly
+    await expect(word).toHaveValue('qwert')
+    await word.fill('')
+    await word.pressSequentially('kifak')
+    await expect(word).toHaveValue('kifak')
+    expect(mock.requests.filter((r) => r.fn === 'submit-suggestion')).toHaveLength(0)
+  })
+
+  test('a word prefilled from the prompt is also capped at five', async ({ page }) => {
+    await mockSupabase(page, { enforce: false })
+    await openGame(page)
+    await guess(page, 'mnaqo')
+    await page.locator('.nudge').getByRole('button', { name: 'Suggest it' }).click()
+    await expect(page.getByLabel('Word (5 characters)')).toHaveValue('mnaqo')
+  })
+})
+
 test.describe('sharing', () => {
   test('copies a result grid with the number and attempts but never the answer', async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write'])
@@ -624,5 +663,52 @@ test.describe('midnight in Beirut', () => {
     await page.clock.runFor(2000)
     await expect(page.getByText(`No. ${puzzleNumberFor('2026-11-02')}`)).toBeVisible({ timeout: 10_000 })
     await expect(attemptsText(page)).toHaveText('6 attempts left')
+  })
+})
+
+test.describe('past days', () => {
+  test('replay a missed day without touching today, streaks or the community numbers', async ({ page }) => {
+    const mock = await mockSupabase(page)
+    await openGame(page)
+
+    await page.getByRole('button', { name: 'Play a past day' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Play a past day' })
+    await expect(dialog.locator('.archive-row')).toHaveCount(3) // today plus two earlier days
+    await expect(dialog.locator('.archive-row').first()).toHaveAttribute('aria-current', 'true')
+
+    await dialog.locator('.archive-row').nth(1).click()
+    await expect(dialog).toHaveCount(0)
+    await expect(page.locator('.info-bar')).toContainText(`No. ${puzzleNumberFor(mock.past[0])}`)
+    await expect(page.getByRole('button', { name: 'Back to today' })).toBeVisible()
+    await expect(attemptsText(page)).toHaveText('6 attempts left')
+
+    await guess(page, 'kteer') // the past day's answer
+    await expect(page.getByRole('dialog', { name: 'You got it' })).toBeVisible({ timeout: 8000 })
+    const sent = mock.requests.filter((r) => r.fn === 'submit-guess').at(-1)!.body
+    expect(sent).toMatchObject({ puzzle_date: mock.past[0], archive: true })
+    expect(mock.community.size).toBe(0) // not counted for anyone
+    expect(await page.evaluate(() => localStorage.getItem('wordleb:stats'))).toBeNull() // no streak or total
+
+    await page.keyboard.press('Escape')
+    await page.getByRole('button', { name: 'Back to today' }).click()
+    await expect(page.locator('.info-bar')).toContainText(`No. ${mock.number}`)
+    await expect(page.locator('.info-bar')).toContainText('Next word')
+    await expect(attemptsText(page)).toHaveText('6 attempts left') // today is still untouched
+
+    await page.getByRole('button', { name: 'Play a past day' }).click()
+    await expect(page.getByRole('dialog', { name: 'Play a past day' }).locator('.archive-row').nth(1)).toContainText('Solved 1/6')
+  })
+
+  test('a stale date without the archive flag is still refused', async ({ page }) => {
+    const mock = await mockSupabase(page)
+    await openGame(page)
+    const status = await page.evaluate(
+      async ({ base, date }) => {
+        const r = await fetch(`${base}/functions/v1/submit-guess`, { method: 'POST', body: JSON.stringify({ guess: 'kteer', puzzle_date: date }) })
+        return r.status
+      },
+      { base: 'https://mock.supabase.test', date: mock.past[0] },
+    )
+    expect(status).toBe(409)
   })
 })

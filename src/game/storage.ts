@@ -51,24 +51,39 @@ function write(key: string, value: unknown) {
   }
 }
 
+function usable(saved: SavedGame | null | undefined, dateKey: string): saved is SavedGame {
+  if (!saved || saved.dateKey !== dateKey) return false
+  if (!Array.isArray(saved.guesses) || !Array.isArray(saved.results)) return false
+  if (saved.guesses.length !== saved.results.length) return false
+  // A game in progress is only resumable with the server's proof of its guesses.
+  return !(saved.status === 'playing' && saved.guesses.length > 0 && !saved.stateToken)
+}
+
 export function loadGame(dateKey: string): SavedGame | null {
   const saved = read<SavedGame>(GAME_KEY)
-  if (
-    !saved ||
-    saved.dateKey !== dateKey ||
-    !Array.isArray(saved.guesses) ||
-    !Array.isArray(saved.results) ||
-    saved.guesses.length !== saved.results.length ||
-    // A game in progress is only resumable with the server's proof of its guesses.
-    (saved.status === 'playing' && saved.guesses.length > 0 && !saved.stateToken)
-  ) {
-    return null
-  }
-  return saved
+  return usable(saved, dateKey) ? saved : null
 }
 
 export function saveGame(game: SavedGame) {
   write(GAME_KEY, game)
+}
+
+const ARCHIVE_KEY = 'wordleb:archive'
+
+/** Replays of past puzzles, one entry per date, kept apart from today's game. */
+function readArchive(): Record<string, SavedGame> {
+  const saved = read<Record<string, SavedGame>>(ARCHIVE_KEY)
+  return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {}
+}
+
+/** A past puzzle's local progress. A game saved on the day itself lives in the main slot, so look there too. */
+export function loadPastGame(dateKey: string): SavedGame | null {
+  const saved = readArchive()[dateKey]
+  return usable(saved, dateKey) ? saved : loadGame(dateKey)
+}
+
+export function savePastGame(game: SavedGame) {
+  write(ARCHIVE_KEY, { ...readArchive(), [game.dateKey]: game })
 }
 
 export function loadStats(): Stats {
