@@ -52,8 +52,30 @@ const ARABIC_RE = /^[؀-ۿݐ-ݿ\s]+$/
 // deno-lint-ignore no-control-regex
 const CONTROL_RE = /[\u0000-\u001F\u007F]/g
 
+/** A word may carry at most this many digits (Arabizi uses a digit for a sound, not for whole words). */
+const MAX_DIGITS = 2
+
+function countDigits(value: string): number {
+  return (value.match(/[0-9]/g) ?? []).length
+}
+
+/**
+ * Why a (normalised) guess is not well formed, or null when it is. 'characters' = wrong length or an
+ * unsupported character; 'digits' = more than MAX_DIGITS numbers. Nothing is ever substituted: a 7 is
+ * never turned into an H, or the other way round.
+ */
+function guessFormatProblem(value: unknown): 'characters' | 'digits' | null {
+  if (typeof value !== 'string' || !WORD_RE.test(value)) return 'characters'
+  return countDigits(value) > MAX_DIGITS ? 'digits' : null
+}
+
+const GUESS_FORMAT_MESSAGES = {
+  characters: 'A guess is exactly 5 valid characters.',
+  digits: `A word can have at most ${MAX_DIGITS} numbers.`,
+} as const
+
 function isValidGuessFormat(value: unknown): value is string {
-  return typeof value === 'string' && WORD_RE.test(value)
+  return guessFormatProblem(value) === null
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -98,7 +120,9 @@ function validateSuggestion(input: unknown): SuggestionCheck {
   const arabic = cleanText(body.arabic_spelling)
   const example = cleanText(body.example_sentence)
 
-  if (!isValidGuessFormat(word)) {
+  const problem = guessFormatProblem(word)
+  if (problem === 'digits') return { ok: false, message: GUESS_FORMAT_MESSAGES.digits }
+  if (problem) {
     return { ok: false, message: 'The word must be exactly 5 characters: letters a-z or the digits 2, 3, 5, 7, 8.' }
   }
   if (meaning.length > 200) {
@@ -259,6 +283,17 @@ Deno.serve(async (req) => {
       return json({ error: 'already_exists', message: 'We already have that word.' }, 409)
     }
 
+    // An accepted spelling variant of a word we already have is not a new word either.
+    const { data: asVariant, error: variantError } = await db
+      .from('word_variants')
+      .select('canonical_word')
+      .eq('variant', suggestion.word.toUpperCase())
+      .limit(1)
+    // The table may not exist yet on an older database: only a real lookup result counts.
+    if (!variantError && asVariant && asVariant.length > 0) {
+      return json({ error: 'already_exists', message: 'We already have that word.' }, 409)
+    }
+
     const { data: pending, error: pendingError } = await db
       .from('suggestions')
       .select('id')
@@ -270,6 +305,10 @@ Deno.serve(async (req) => {
     }
 
     const { error: insertError } = await db.from('suggestions').insert(suggestion)
+    // 23505 = a concurrent duplicate hit the unique index (if suggestions-hardening.sql is applied).
+    if (insertError?.code === '23505') {
+      return json({ error: 'already_suggested', message: 'Someone already suggested that word.' }, 409)
+    }
     if (insertError) throw insertError
 
     return json({ ok: true })

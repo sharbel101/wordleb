@@ -49,6 +49,17 @@ Deno.serve(async (req) => {
       return json({ error: 'already_exists', message: 'We already have that word.' }, 409)
     }
 
+    // An accepted spelling variant of a word we already have is not a new word either.
+    const { data: asVariant, error: variantError } = await db
+      .from('word_variants')
+      .select('canonical_word')
+      .eq('variant', suggestion.word.toUpperCase())
+      .limit(1)
+    // The table may not exist yet on an older database: only a real lookup result counts.
+    if (!variantError && asVariant && asVariant.length > 0) {
+      return json({ error: 'already_exists', message: 'We already have that word.' }, 409)
+    }
+
     const { data: pending, error: pendingError } = await db
       .from('suggestions')
       .select('id')
@@ -60,6 +71,10 @@ Deno.serve(async (req) => {
     }
 
     const { error: insertError } = await db.from('suggestions').insert(suggestion)
+    // 23505 = a concurrent duplicate hit the unique index (if suggestions-hardening.sql is applied).
+    if (insertError?.code === '23505') {
+      return json({ error: 'already_suggested', message: 'Someone already suggested that word.' }, 409)
+    }
     if (insertError) throw insertError
 
     return json({ ok: true })

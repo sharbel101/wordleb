@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getBeirutDate, puzzleNumberFor } from '../../supabase/functions/_shared/beirut'
+import { MAX_DIGITS, countDigits } from '../../supabase/functions/_shared/validate'
 import { ApiError, getDailyPuzzle, submitGuess } from './api'
 import {
   MAX_ATTEMPTS,
@@ -203,10 +204,15 @@ export function useGame(inputEnabled: boolean) {
   const addLetter = useCallback(
     (ch: string) => {
       if (!canType || !isValidChar(ch)) return
+      // A word has at most two numbers: say so right away instead of letting a third be typed.
+      if (/[0-9]/.test(ch) && countDigits(current) >= MAX_DIGITS) {
+        showToast(`Use at most ${MAX_DIGITS} numbers.`, 1500)
+        return
+      }
       setUnknownGuess(null)
       setCurrent((c) => (c.length < WORD_LENGTH ? c + ch.toLowerCase() : c))
     },
-    [canType],
+    [canType, current, showToast],
   )
 
   const backspace = useCallback(() => {
@@ -331,6 +337,9 @@ export function useGame(inputEnabled: boolean) {
         showToast('Your saved game could not be resumed. Starting over.', 3500)
       } else if (err instanceof ApiError && err.kind === 'no_puzzle') {
         showToast("That puzzle isn't available right now.", 2500)
+      } else if (err instanceof ApiError && err.kind === 'invalid') {
+        // The server's own format rules (for example the two-number limit) said no.
+        showToast(err.message, 2500)
       } else {
         showToast("Couldn't reach the server. Try again.", 2500)
       }

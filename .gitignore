@@ -31,3 +31,6 @@ playwright-report/
 # Logs
 *.log
 npm-debug.log*
+
+# Local review reports (they mention upcoming daily puzzle words): keep out of Git
+reports/

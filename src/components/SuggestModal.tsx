@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { ApiError, submitSuggestion } from '../game/api'
 import { ARABIZI_DIGITS, WORD_LENGTH, isWellFormedGuess } from '../game/logic'
+import { MAX_DIGITS } from '../../supabase/functions/_shared/validate'
 import { Modal } from './Modal'
 
 function errorMessage(err: unknown): string {
@@ -32,7 +33,7 @@ export function SuggestModal({ onClose, initialWord = '' }: { onClose: () => voi
     if (busy) return
     const clean = word.trim().toLowerCase()
     if (!isWellFormedGuess(clean)) {
-      setError(`Use exactly ${WORD_LENGTH} characters: letters a-z or the digits ${ARABIZI_DIGITS.join(', ')}.`)
+      setError(`Use exactly ${WORD_LENGTH} characters: letters a-z or the digits ${ARABIZI_DIGITS.join(', ')}, with at most ${MAX_DIGITS} numbers.`)
       return
     }
 

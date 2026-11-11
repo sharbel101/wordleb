@@ -1,3 +1,5 @@
+import { MAX_DIGITS, countDigits } from '../../supabase/functions/_shared/validate'
+
 export const GUESS_LENGTH = 5
 
 export type GuessCheck =
@@ -9,6 +11,7 @@ const MESSAGES = {
   characters: "These characters aren't supported.",
   repeating: "That's a lot of repeating letters.",
   notAWord: "That doesn't look like a word.",
+  digits: `Use at most ${MAX_DIGITS} numbers.`,
   duplicate: 'You already tried this word.',
 }
 
@@ -60,6 +63,7 @@ export function validateGuess(raw: string, previousGuesses: string[] = []): Gues
 
   // The tiny extra strictness.
   if (/(.)\1\1/.test(guess)) return fail(MESSAGES.repeating)
+  if (countDigits(guess) > MAX_DIGITS) return fail(MESSAGES.digits)
   if (!/[AEIOUY0-9]/.test(guess)) return fail(MESSAGES.notAWord)
   if (longestConsonantRun(guess) > MAX_CONSONANT_RUN) return fail(MESSAGES.notAWord)
 

@@ -1,5 +1,6 @@
 import { msUntilNextBeirutMidnight } from '../../supabase/functions/_shared/beirut'
 import type { TileState } from '../../supabase/functions/_shared/evaluate'
+import { MAX_DIGITS, countDigits } from '../../supabase/functions/_shared/validate'
 import { GUESS_LENGTH } from './validateGuess'
 
 export type { TileState }
@@ -19,7 +20,7 @@ export function isValidChar(ch: string): boolean {
 
 /** Alphabet and length check only. The full rules live in `validateGuess`. */
 export function isWellFormedGuess(guess: string): boolean {
-  return [...guess].length === WORD_LENGTH && [...guess].every(isValidChar)
+  return [...guess].length === WORD_LENGTH && [...guess].every(isValidChar) && countDigits(guess) <= MAX_DIGITS
 }
 
 const RANK: Record<TileState, number> = { absent: 0, present: 1, correct: 2 }

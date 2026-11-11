@@ -84,9 +84,12 @@ describe('validateGuess: genuine Lebanese Arabizi still passes', () => {
     expect(validateGuess(guess)).toEqual({ valid: true, normalizedGuess: guess })
   })
 
-  it('does not judge digit-heavy or odd-looking words', () => {
-    for (const guess of ['23578', '12345', '77812', 'EERIE', 'AAEEX']) {
+  it('does not judge odd-looking words, but a word never has more than two numbers', () => {
+    for (const guess of ['23ABC', '2A3BC', 'EERIE', 'AAEEX']) {
       expect(validateGuess(guess).valid, guess).toBe(true)
+    }
+    for (const guess of ['23578', '12345', '77812']) {
+      expect(validateGuess(guess).valid, guess).toBe(false)
     }
   })
 })

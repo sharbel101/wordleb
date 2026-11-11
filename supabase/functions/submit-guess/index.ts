@@ -3,7 +3,7 @@ import { adminClient, json, preflight, runInBackground } from '../_shared/http.t
 import { createVariantCache, resolveSpelling } from '../_shared/spelling.ts'
 import { issueToken, readToken } from '../_shared/token.ts'
 import { playTurn } from '../_shared/turn.ts'
-import { isPastPuzzleDate, isValidGuessFormat, isValidPlayerId, normalizeGuess } from '../_shared/validate.ts'
+import { GUESS_FORMAT_MESSAGES, guessFormatProblem, isPastPuzzleDate, isValidPlayerId, normalizeGuess } from '../_shared/validate.ts'
 
 const ENFORCE_WORD_LIST = Deno.env.get('ENFORCE_WORD_LIST') === 'true'
 
@@ -35,9 +35,10 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => null)
     const guess = normalizeGuess(body?.guess)
-    if (!isValidGuessFormat(guess)) {
-      return json({ error: 'bad_format', message: 'A guess is exactly 5 valid characters.' }, 400)
-    }
+    // Authoritative format check (the browser repeats it only for instant feedback). It runs on the
+    // trimmed, lower-cased guess, so letter case and surrounding spaces cannot get around it.
+    const formatProblem = guessFormatProblem(guess)
+    if (formatProblem) return json({ error: 'bad_format', message: GUESS_FORMAT_MESSAGES[formatProblem] }, 400)
 
     const today = getBeirutDate()
     // Today's puzzle by default. A past puzzle is served only when the client explicitly asks for

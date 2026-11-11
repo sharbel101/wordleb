@@ -284,6 +284,16 @@ test.describe('spelling variants', () => {
     await expect(page.locator('.row').nth(1).locator('.tile').first()).toHaveText('')
   })
 
+  test('a third number is refused as you type, and never sent to the server', async ({ page }) => {
+    const mock = await mockSupabase(page)
+    await openGame(page)
+    await typeWord(page, '2a3')
+    await page.keyboard.press('5')
+    await expect(toast(page)).toContainText('at most 2 numbers')
+    expect(await page.locator('.row').nth(0).locator('.tile').evaluateAll((t) => t.map((x) => x.textContent).join(''))).toBe('2A3')
+    expect(mock.requests.filter((r) => r.fn === 'submit-guess')).toHaveLength(0)
+  })
+
   test('a four-letter attempt such as RIHA is still refused', async ({ page }) => {
     const mock = await mockSupabase(page)
     await openGame(page)
