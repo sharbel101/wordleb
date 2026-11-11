@@ -15,6 +15,18 @@
   # public, so Netlify's secrets scanner would otherwise fail the build on them.
   # NEVER add a real secret (a service-role key, a database password...) to this list.
   SECRETS_SCAN_OMIT_KEYS = "VITE_SUPABASE_URL,VITE_SUPABASE_ANON_KEY"
+  # Send API calls through this site's own /api path (see the redirect below). The app falls back
+  # to the direct Supabase address by itself if this path ever fails.
+  VITE_API_PROXY = "1"
+
+# API calls go to wordleb.com/api/<function>, which Netlify forwards to the Supabase Edge Function
+# (a rewrite, so the browser never leaves this site). Must stay above the catch-all below.
+# The project address is public (it is also in the browser bundle); no key is stored here.
+[[redirects]]
+  from = "/api/*"
+  to = "https://xbxafeqnipodxjxzyteq.supabase.co/functions/v1/:splat"
+  status = 200
+  force = true
 
 # Single-page app: every path serves the game.
 [[redirects]]

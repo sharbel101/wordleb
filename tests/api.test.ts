@@ -38,6 +38,20 @@ describe('past puzzles', () => {
   })
 })
 
+describe('spelling variants', () => {
+  const scored = { valid: true, result: ['correct', 'correct', 'correct', 'correct', 'correct'], won: true, lost: false, known: true, attempt: 1 }
+
+  it('passes on the canonical spelling when the server resolved a variant', async () => {
+    mockFetch(200, { ...scored, canonical: 'REE7A' })
+    await expect(submitGuess({ guess: 'reeha', stateToken: null, puzzleDate: '2026-11-04', playerId: PLAYER })).resolves.toMatchObject({ valid: true, canonical: 'ree7a' })
+  })
+
+  it('has no canonical spelling for an ordinary guess', async () => {
+    mockFetch(200, scored)
+    await expect(submitGuess({ guess: 'ree7a', stateToken: null, puzzleDate: '2026-11-04', playerId: PLAYER })).resolves.toMatchObject({ canonical: null })
+  })
+})
+
 describe('api client', () => {
   it('calls the edge function with the anon key and maps the puzzle', async () => {
     const fetchFn = mockFetch(200, { puzzle_date: '2026-11-01', puzzle_number: 305, word_length: 5 })

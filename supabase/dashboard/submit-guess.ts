@@ -185,6 +185,173 @@ function createRateLimiter(limit: number, windowMs: number) {
   }
 }
 
+// ---- Client error reports ----------------------------------------------------------------------
+// The browser reports requests that failed so connection problems can be diagnosed. Nothing
+// identifying is accepted: no player id, no IP (never read), no free text. Every field is
+// checked against a fixed list or clamped, so the table can only ever hold these shapes.
+
+const REPORTED_FUNCTIONS = ['get-daily-puzzle', 'submit-guess', 'submit-suggestion', 'get-community-stats'] as const
+const REPORT_REASONS = ['timeout', 'fetch_failed', 'offline', 'http_5xx', 'http_4xx', 'bad_response', 'recovered'] as const
+const REPORT_OUTCOMES = ['retry', 'failed', 'recovered'] as const
+const REPORT_BROWSERS = ['chrome', 'safari', 'firefox', 'edge', 'samsung', 'instagram', 'facebook', 'whatsapp', 'other'] as const
+const REPORT_NETS = ['slow-2g', '2g', '3g', '4g'] as const
+const MAX_REPORTS_PER_BATCH = 20
+
+interface ClientErrorEvent {
+  fn: string
+  reason: string
+  status: number | null
+  duration_ms: number
+  via: 'proxy' | 'direct'
+  attempt: number
+  outcome: string
+  online: boolean
+  net: string | null
+  browser: string
+}
+
+function oneOf(list: readonly string[], v: unknown): string | null {
+  return typeof v === 'string' && list.includes(v) ? v : null
+}
+
+function clampInt(v: unknown, min: number, max: number): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return null
+  return Math.min(max, Math.max(min, Math.round(v)))
+}
+
+function validateClientErrors(
+  body: unknown,
+): { ok: true; events: ClientErrorEvent[] } | { ok: false } {
+  const raw = (body as { events?: unknown } | null)?.events
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_REPORTS_PER_BATCH) return { ok: false }
+
+  const events: ClientErrorEvent[] = []
+  for (const e of raw as Record<string, unknown>[]) {
+    if (!e || typeof e !== 'object') return { ok: false }
+    const fn = oneOf(REPORTED_FUNCTIONS, e.fn)
+    const reason = oneOf(REPORT_REASONS, e.reason)
+    const outcome = oneOf(REPORT_OUTCOMES, e.outcome)
+    const via = e.via === 'proxy' || e.via === 'direct' ? e.via : null
+    const attempt = clampInt(e.attempt, 1, 5)
+    const duration = clampInt(e.ms, 0, 120_000)
+    if (!fn || !reason || !outcome || !via || attempt === null || duration === null) return { ok: false }
+    events.push({
+      fn,
+      reason,
+      status: clampInt(e.status, 0, 599),
+      duration_ms: duration,
+      via,
+      attempt,
+      outcome,
+      online: e.online !== false,
+      net: oneOf(REPORT_NETS, e.net),
+      browser: oneOf(REPORT_BROWSERS, e.browser) ?? 'other',
+    })
+  }
+  return { ok: true, events }
+}
+
+// ---- _shared/spelling.ts ----
+/**
+ * Spelling variants. A variant is another way to write an existing dictionary word (REE7A / REEHA),
+ * not a separate word. Before a guess is scored it is resolved to its canonical spelling, and the
+ * canonical guess is compared with the canonical answer, so tiles and the win check always compare
+ * one spelling with one spelling.
+ *
+ * Everything here is lower case, like the rest of the guess pipeline.
+ */
+
+/** variant -> canonical word */
+type VariantMap = ReadonlyMap<string, string>
+
+interface VariantRow {
+  variant: string
+  canonical_word: string
+}
+
+function toVariantMap(rows: readonly VariantRow[]): VariantMap {
+  const map = new Map<string, string>()
+  for (const r of rows) {
+    const variant = String(r.variant).trim().toLowerCase()
+    const canonical = String(r.canonical_word).trim().toLowerCase()
+    if (variant && canonical && variant !== canonical) map.set(variant, canonical)
+  }
+  return map
+}
+
+interface ResolvedTurn {
+  /** What to score: the guess in its canonical spelling. */
+  guess: string
+  /** What to score against: the answer in its canonical spelling. */
+  answer: string
+  /** True when the player typed a registered variant (the canonical spelling is returned to them). */
+  viaVariant: boolean
+  /** A known guess is the answer, an approved word, or a registered variant. */
+  known: boolean
+}
+
+/**
+ * `approvedGuess`: the typed guess is itself an approved dictionary word, so it is canonical already
+ * (the database guarantees a spelling is never both a word and a variant).
+ */
+function resolveSpelling(guess: string, answer: string, variants: VariantMap, approvedGuess: boolean): ResolvedTurn {
+  const canonicalAnswer = variants.get(answer) ?? answer
+
+  let canonicalGuess = guess
+  let viaVariant = false
+  if (!approvedGuess) {
+    const canonical = variants.get(guess)
+    if (canonical !== undefined) {
+      canonicalGuess = canonical
+      viaVariant = true
+    }
+  }
+
+  return {
+    guess: canonicalGuess,
+    answer: canonicalAnswer,
+    viaVariant,
+    known: approvedGuess || viaVariant || canonicalGuess === canonicalAnswer,
+  }
+}
+
+/**
+ * Registered variants, cached per function instance for a minute so scoring a guess costs no extra
+ * database round trip. The table is small. A variant added in the admin starts working within the
+ * cache lifetime. If a refresh fails, the last good copy is kept (or, with none yet, no variants:
+ * the game keeps working with canonical words only and the failure is logged).
+ */
+const VARIANT_CACHE_MS = 60_000
+
+function createVariantCache(
+  load: () => Promise<readonly VariantRow[]>,
+  now: () => number = Date.now,
+  ttlMs: number = VARIANT_CACHE_MS,
+) {
+  let map: VariantMap = new Map()
+  let loadedAt = Number.NEGATIVE_INFINITY
+  let inflight: Promise<void> | null = null
+
+  async function refresh() {
+    try {
+      map = toVariantMap(await load())
+      loadedAt = now()
+    } catch (err) {
+      console.error('could not load spelling variants', err)
+      // Do not hammer a failing database: try again after a short pause, keeping what we have.
+      loadedAt = now() - ttlMs + 10_000
+    }
+  }
+
+  return async function get(): Promise<VariantMap> {
+    if (now() - loadedAt >= ttlMs) {
+      inflight ??= refresh().finally(() => (inflight = null))
+      await inflight
+    }
+    return map
+  }
+}
+
 // ---- _shared/token.ts ----
 /**
  * Signed game state. The browser only ever holds an opaque token; it cannot edit the
@@ -324,7 +491,16 @@ async function runInBackground(work: Promise<unknown>): Promise<void> {
 
 
 
+
 const ENFORCE_WORD_LIST = Deno.env.get('ENFORCE_WORD_LIST') === 'true'
+
+// Registered spelling variants (REEHA -> REE7A), kept in memory for a minute. Server-side only: the
+// mapping is never sent to the browser, which only ever learns the canonical spelling of its own guess.
+const getVariants = createVariantCache(async () => {
+  const { data, error } = await adminClient().from('word_variants').select('variant, canonical_word').limit(5000)
+  if (error) throw error
+  return data ?? []
+})
 
 // Scores one guess against today's answer. The answer and its details are only
 // returned once the game is over (solved, or the final attempt was used).
@@ -374,21 +550,29 @@ Deno.serve(async (req) => {
 
     const db = adminClient()
     // The puzzle and the "is this an approved word?" lookup are independent, so run them together.
-    const [puzzleResult, knownResult] = await Promise.all([
+    const [puzzleResult, knownResult, variants] = await Promise.all([
       db.from('daily_puzzles').select('word').eq('puzzle_date', puzzleDate).maybeSingle(),
       db.from('words').select('word').ilike('word', guess).eq('approved', true).limit(1),
+      getVariants(),
     ])
     if (puzzleResult.error) throw puzzleResult.error
     const puzzle = puzzleResult.data
     if (!puzzle) return json({ error: 'no_puzzle', puzzle_date: puzzleDate }, 404)
 
-    const answer = String(puzzle.word).trim().toLowerCase()
+    const rawAnswer = String(puzzle.word).trim().toLowerCase()
 
-    // A guess is "known" if it is the answer or an approved word. If the words lookup itself fails
-    // we do not know, so the game carries on and nothing is flagged or logged.
+    // A guess is "known" if it is the answer, an approved word or a registered spelling variant. If
+    // the words lookup itself fails we do not know, so the game carries on and nothing is flagged or
+    // logged.
     const lookupFailed = !!knownResult.error
     if (lookupFailed) console.error('words lookup failed', knownResult.error?.message)
-    const known = guess === answer || lookupFailed || (knownResult.data?.length ?? 0) > 0
+    const approvedGuess = (knownResult.data?.length ?? 0) > 0
+
+    // A variant is another spelling of a dictionary word, not a word of its own: resolve both sides
+    // to their canonical spelling, then score and compare canonical against canonical.
+    const spelling = resolveSpelling(guess, rawAnswer, variants, approvedGuess)
+    const answer = spelling.answer
+    const known = spelling.known || lookupFailed
 
     // Word-list enforcement: OFF while the dictionary is still being built from play. Turn it on
     // later with the secret ENFORCE_WORD_LIST=true (the answer itself is always accepted).
@@ -396,7 +580,7 @@ Deno.serve(async (req) => {
       return json({ valid: false, reason: 'not_in_list' })
     }
 
-    const turn = playTurn(guess, answer, previous)
+    const turn = playTurn(spelling.guess, answer, previous)
     if ('error' in turn) {
       return json({ error: 'game_over', message: 'This puzzle is already finished.' }, 400)
     }
@@ -410,6 +594,9 @@ Deno.serve(async (req) => {
       // false = not in the dictionary yet, so the game can offer to suggest it.
       known,
     }
+    // Only when the player typed a variant: the canonical spelling that was scored, so the board shows
+    // the word the tiles describe.
+    if (spelling.viaVariant) response.canonical = spelling.guess
 
     if (turn.won || turn.lost) {
       const { data: details, error: detailsError } = await db
@@ -442,7 +629,7 @@ Deno.serve(async (req) => {
       }
     } else {
       // The next guess must present this token; only the server can produce it.
-      response.state_token = await issueToken({ d: puzzleDate, g: [...previous, guess] }, secret)
+      response.state_token = await issueToken({ d: puzzleDate, g: [...previous, spelling.guess] }, secret)
     }
 
     // Remember which unknown words players try, so popular ones can be reviewed and approved.

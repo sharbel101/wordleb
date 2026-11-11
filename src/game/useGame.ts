@@ -263,7 +263,10 @@ export function useGame(inputEnabled: boolean) {
       // Not an approved word: no attempt is spent and the row stays editable.
       if (!res.valid) return reject('Not in word list')
 
-      const nextGuesses = [...guesses, guess]
+      // A spelling variant is scored (and shown) in its canonical spelling, so the tiles describe
+      // exactly the letters on the board.
+      const played = res.canonical ?? guess
+      const nextGuesses = [...guesses, played]
       const nextResults = [...results, res.result]
       const nextStatus: GameStatus = res.won ? 'won' : res.lost ? 'lost' : 'playing'
       const nextAnswer = res.answer ?? answer
@@ -293,14 +296,14 @@ export function useGame(inputEnabled: boolean) {
 
       // Offer to suggest the word once its tiles have been revealed, and tidy the prompt away later.
       if (!res.known) {
-        later(() => stillHere() && setUnknownGuess(guess), revealDelay())
-        later(() => setUnknownGuess((g) => (g === guess ? null : g)), revealDelay() + 10_000)
+        later(() => stillHere() && setUnknownGuess(played), revealDelay())
+        later(() => setUnknownGuess((g) => (g === played ? null : g)), revealDelay() + 10_000)
       }
 
       later(() => {
         if (!stillHere()) return
         setRevealedCount(nextGuesses.length)
-        const summary = describeGuess(guess, res.result, nextGuesses.length)
+        const summary = describeGuess(played, res.result, nextGuesses.length)
         if (!finishedNow) {
           setAnnouncement(summary)
           return

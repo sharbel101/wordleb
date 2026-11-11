@@ -2,6 +2,7 @@ import type { Page, Route } from '@playwright/test'
 import { getBeirutDate, puzzleNumberFor } from '../supabase/functions/_shared/beirut'
 import { issueToken, readToken } from '../supabase/functions/_shared/token'
 import { shapeCommunityStats } from '../supabase/functions/_shared/community'
+import { resolveSpelling } from '../supabase/functions/_shared/spelling'
 import { playTurn } from '../supabase/functions/_shared/turn'
 import { isValidPlayerId } from '../supabase/functions/_shared/validate'
 
@@ -18,6 +19,8 @@ export interface MockState {
   past: string[]
   pastAnswer: string
   words: Set<string>
+  /** Registered spelling variants: variant -> canonical word (both lower case). */
+  variants: Map<string, string>
   /** Every request the app made, for asserting that nothing extra was sent. */
   requests: { fn: string; body: Record<string, unknown> }[]
   guessDelayMs: number
@@ -66,6 +69,10 @@ export async function mockSupabase(page: Page, overrides: Partial<MockState> = {
     past: [dayBefore(date, 1), dayBefore(date, 2)],
     pastAnswer: 'kteer',
     words: new Set(['5obez', 'kteer', 'yalla', 'kifak', 'ba7ar', 'shams', 'habib', 'eerie', '7elou']),
+    variants: new Map([
+      ['5ubez', '5obez'],
+      ['7elow', '7elou'],
+    ]),
     requests: [],
     guessDelayMs: 0,
     statsMode: 'ok',
@@ -83,6 +90,8 @@ export async function mockSupabase(page: Page, overrides: Partial<MockState> = {
     if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS })
 
     const fn = new URL(request.url()).pathname.split('/').pop()!
+    // Connection-problem reports are bookkeeping: acknowledge them without counting them as game traffic.
+    if (fn === 'log-client-error') return json(route, 200, { ok: true })
     const body = (request.postDataJSON() ?? {}) as Record<string, unknown>
     state.requests.push({ fn, body })
 
@@ -123,7 +132,9 @@ export async function mockSupabase(page: Page, overrides: Partial<MockState> = {
         if (!saved || saved.d !== day) return json(route, 400, { error: 'bad_state' })
         previous = saved.g
       }
-      const known = guess === answer || state.words.has(guess)
+      // Same rule as the real function: resolve both spellings to canonical, then score canonical vs canonical.
+      const spelling = resolveSpelling(guess, answer, state.variants, state.words.has(guess))
+      const known = spelling.known
       if (!known && state.enforce) return json(route, 200, { valid: false })
       if (!known && isValidPlayerId(body.player_id)) {
         const players = state.unknownLog.get(guess) ?? new Set<string>()
@@ -131,9 +142,10 @@ export async function mockSupabase(page: Page, overrides: Partial<MockState> = {
         state.unknownLog.set(guess, players)
       }
 
-      const turn = playTurn(guess, answer, previous)
+      const turn = playTurn(spelling.guess, spelling.answer, previous)
       if ('error' in turn) return json(route, 400, { error: 'game_over' })
       const res: Record<string, unknown> = { valid: true, ...turn, known }
+      if (spelling.viaVariant) res.canonical = spelling.guess
       if (turn.won || turn.lost) {
         res.answer = { word: answer, ...ANSWER_DETAILS }
         // Same rule as the real function: one result per player per day, the first one wins.
@@ -142,7 +154,7 @@ export async function mockSupabase(page: Page, overrides: Partial<MockState> = {
           state.community.set(key, turn.won ? turn.attempt : 0)
         }
       }
-      else res.state_token = await issueToken({ d: day, g: [...previous, guess] }, TEST_SECRET)
+      else res.state_token = await issueToken({ d: day, g: [...previous, spelling.guess] }, TEST_SECRET)
       return json(route, 200, res)
     }
 

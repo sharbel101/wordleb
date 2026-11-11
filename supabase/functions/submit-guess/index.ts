@@ -1,10 +1,19 @@
 import { getBeirutDate } from '../_shared/beirut.ts'
 import { adminClient, json, preflight, runInBackground } from '../_shared/http.ts'
+import { createVariantCache, resolveSpelling } from '../_shared/spelling.ts'
 import { issueToken, readToken } from '../_shared/token.ts'
 import { playTurn } from '../_shared/turn.ts'
 import { isPastPuzzleDate, isValidGuessFormat, isValidPlayerId, normalizeGuess } from '../_shared/validate.ts'
 
 const ENFORCE_WORD_LIST = Deno.env.get('ENFORCE_WORD_LIST') === 'true'
+
+// Registered spelling variants (REEHA -> REE7A), kept in memory for a minute. Server-side only: the
+// mapping is never sent to the browser, which only ever learns the canonical spelling of its own guess.
+const getVariants = createVariantCache(async () => {
+  const { data, error } = await adminClient().from('word_variants').select('variant, canonical_word').limit(5000)
+  if (error) throw error
+  return data ?? []
+})
 
 // Scores one guess against today's answer. The answer and its details are only
 // returned once the game is over (solved, or the final attempt was used).
@@ -54,21 +63,29 @@ Deno.serve(async (req) => {
 
     const db = adminClient()
     // The puzzle and the "is this an approved word?" lookup are independent, so run them together.
-    const [puzzleResult, knownResult] = await Promise.all([
+    const [puzzleResult, knownResult, variants] = await Promise.all([
       db.from('daily_puzzles').select('word').eq('puzzle_date', puzzleDate).maybeSingle(),
       db.from('words').select('word').ilike('word', guess).eq('approved', true).limit(1),
+      getVariants(),
     ])
     if (puzzleResult.error) throw puzzleResult.error
     const puzzle = puzzleResult.data
     if (!puzzle) return json({ error: 'no_puzzle', puzzle_date: puzzleDate }, 404)
 
-    const answer = String(puzzle.word).trim().toLowerCase()
+    const rawAnswer = String(puzzle.word).trim().toLowerCase()
 
-    // A guess is "known" if it is the answer or an approved word. If the words lookup itself fails
-    // we do not know, so the game carries on and nothing is flagged or logged.
+    // A guess is "known" if it is the answer, an approved word or a registered spelling variant. If
+    // the words lookup itself fails we do not know, so the game carries on and nothing is flagged or
+    // logged.
     const lookupFailed = !!knownResult.error
     if (lookupFailed) console.error('words lookup failed', knownResult.error?.message)
-    const known = guess === answer || lookupFailed || (knownResult.data?.length ?? 0) > 0
+    const approvedGuess = (knownResult.data?.length ?? 0) > 0
+
+    // A variant is another spelling of a dictionary word, not a word of its own: resolve both sides
+    // to their canonical spelling, then score and compare canonical against canonical.
+    const spelling = resolveSpelling(guess, rawAnswer, variants, approvedGuess)
+    const answer = spelling.answer
+    const known = spelling.known || lookupFailed
 
     // Word-list enforcement: OFF while the dictionary is still being built from play. Turn it on
     // later with the secret ENFORCE_WORD_LIST=true (the answer itself is always accepted).
@@ -76,7 +93,7 @@ Deno.serve(async (req) => {
       return json({ valid: false, reason: 'not_in_list' })
     }
 
-    const turn = playTurn(guess, answer, previous)
+    const turn = playTurn(spelling.guess, answer, previous)
     if ('error' in turn) {
       return json({ error: 'game_over', message: 'This puzzle is already finished.' }, 400)
     }
@@ -90,6 +107,9 @@ Deno.serve(async (req) => {
       // false = not in the dictionary yet, so the game can offer to suggest it.
       known,
     }
+    // Only when the player typed a variant: the canonical spelling that was scored, so the board shows
+    // the word the tiles describe.
+    if (spelling.viaVariant) response.canonical = spelling.guess
 
     if (turn.won || turn.lost) {
       const { data: details, error: detailsError } = await db
@@ -122,7 +142,7 @@ Deno.serve(async (req) => {
       }
     } else {
       // The next guess must present this token; only the server can produce it.
-      response.state_token = await issueToken({ d: puzzleDate, g: [...previous, guess] }, secret)
+      response.state_token = await issueToken({ d: puzzleDate, g: [...previous, spelling.guess] }, secret)
     }
 
     // Remember which unknown words players try, so popular ones can be reviewed and approved.

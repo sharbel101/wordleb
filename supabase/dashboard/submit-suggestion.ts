@@ -141,6 +141,72 @@ function createRateLimiter(limit: number, windowMs: number) {
   }
 }
 
+// ---- Client error reports ----------------------------------------------------------------------
+// The browser reports requests that failed so connection problems can be diagnosed. Nothing
+// identifying is accepted: no player id, no IP (never read), no free text. Every field is
+// checked against a fixed list or clamped, so the table can only ever hold these shapes.
+
+const REPORTED_FUNCTIONS = ['get-daily-puzzle', 'submit-guess', 'submit-suggestion', 'get-community-stats'] as const
+const REPORT_REASONS = ['timeout', 'fetch_failed', 'offline', 'http_5xx', 'http_4xx', 'bad_response', 'recovered'] as const
+const REPORT_OUTCOMES = ['retry', 'failed', 'recovered'] as const
+const REPORT_BROWSERS = ['chrome', 'safari', 'firefox', 'edge', 'samsung', 'instagram', 'facebook', 'whatsapp', 'other'] as const
+const REPORT_NETS = ['slow-2g', '2g', '3g', '4g'] as const
+const MAX_REPORTS_PER_BATCH = 20
+
+interface ClientErrorEvent {
+  fn: string
+  reason: string
+  status: number | null
+  duration_ms: number
+  via: 'proxy' | 'direct'
+  attempt: number
+  outcome: string
+  online: boolean
+  net: string | null
+  browser: string
+}
+
+function oneOf(list: readonly string[], v: unknown): string | null {
+  return typeof v === 'string' && list.includes(v) ? v : null
+}
+
+function clampInt(v: unknown, min: number, max: number): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return null
+  return Math.min(max, Math.max(min, Math.round(v)))
+}
+
+function validateClientErrors(
+  body: unknown,
+): { ok: true; events: ClientErrorEvent[] } | { ok: false } {
+  const raw = (body as { events?: unknown } | null)?.events
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_REPORTS_PER_BATCH) return { ok: false }
+
+  const events: ClientErrorEvent[] = []
+  for (const e of raw as Record<string, unknown>[]) {
+    if (!e || typeof e !== 'object') return { ok: false }
+    const fn = oneOf(REPORTED_FUNCTIONS, e.fn)
+    const reason = oneOf(REPORT_REASONS, e.reason)
+    const outcome = oneOf(REPORT_OUTCOMES, e.outcome)
+    const via = e.via === 'proxy' || e.via === 'direct' ? e.via : null
+    const attempt = clampInt(e.attempt, 1, 5)
+    const duration = clampInt(e.ms, 0, 120_000)
+    if (!fn || !reason || !outcome || !via || attempt === null || duration === null) return { ok: false }
+    events.push({
+      fn,
+      reason,
+      status: clampInt(e.status, 0, 599),
+      duration_ms: duration,
+      via,
+      attempt,
+      outcome,
+      online: e.online !== false,
+      net: oneOf(REPORT_NETS, e.net),
+      browser: oneOf(REPORT_BROWSERS, e.browser) ?? 'other',
+    })
+  }
+  return { ok: true, events }
+}
+
 // ---- submit-suggestion ----
 
 

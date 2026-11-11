@@ -256,6 +256,43 @@ test.describe('winning and losing', () => {
   })
 })
 
+test.describe('spelling variants', () => {
+  const rowLetters = (page: Page, row: number) =>
+    page.locator('.row').nth(row).locator('.tile').evaluateAll((tiles) => tiles.map((t) => t.textContent ?? '').join('').toLowerCase())
+
+  test('a registered spelling of the answer wins, and the board shows the canonical word', async ({ page }) => {
+    await mockSupabase(page)
+    await openGame(page)
+    await guess(page, '5ubez') // a variant of the answer 5obez
+
+    const dialog = page.getByRole('dialog', { name: 'You got it' })
+    await expect(dialog).toBeVisible({ timeout: 8000 })
+    await expect(dialog).toContainText('Solved in 1 try.')
+    expect(await rowLetters(page, 0)).toBe('5obez')
+    expect(await rowStates(page, 0)).toEqual(['correct', 'correct', 'correct', 'correct', 'correct'])
+  })
+
+  test('a variant of another word is an ordinary wrong guess, scored as that word', async ({ page }) => {
+    await mockSupabase(page)
+    await openGame(page)
+    await guess(page, '7elow') // a variant of 7elou, which is not the answer
+
+    await expect(page.locator('.row').nth(0).locator('.tile.correct, .tile.present, .tile.absent').first()).toBeVisible({ timeout: 4000 })
+    expect(await rowLetters(page, 0)).toBe('7elou')
+    expect(await rowStates(page, 0)).not.toContain('none')
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    await expect(page.locator('.row').nth(1).locator('.tile').first()).toHaveText('')
+  })
+
+  test('a four-letter attempt such as RIHA is still refused', async ({ page }) => {
+    const mock = await mockSupabase(page)
+    await openGame(page)
+    await guess(page, 'riha')
+    await expect(toast(page)).toContainText('Five characters')
+    expect(mock.requests.filter((r) => r.fn === 'submit-guess')).toHaveLength(0)
+  })
+})
+
 test.describe('tamper-proof attempt counting', () => {
   test('the first guess sends no token, later guesses send the server-issued one, never a history', async ({ page }) => {
     const mock = await mockSupabase(page)
@@ -591,7 +628,7 @@ test.describe('puzzle availability and errors', () => {
     const mock = await mockSupabase(page, { puzzleMode: 'offline' })
     await openGame(page)
     await expect(page.getByRole('alert')).toContainText('Connection problem')
-    expect(mock.requests.filter((r) => r.fn === 'get-daily-puzzle')).toHaveLength(2) // one automatic retry
+    expect(mock.requests.filter((r) => r.fn === 'get-daily-puzzle')).toHaveLength(3) // the first try plus two automatic retries
     mock.puzzleMode = 'ok'
     await page.getByRole('button', { name: 'Try again' }).click()
     await expect(page.locator('.board')).toBeVisible()
