@@ -7,6 +7,8 @@ import { StatusPanel } from './components/StatusPanel'
 import { Toast } from './components/Toast'
 import { WordNudge } from './components/WordNudge'
 import { ArchiveModal } from './components/ArchiveModal'
+import { Confetti } from './components/Confetti'
+import { celebrationFor } from './game/celebrations'
 import { buildShareText } from './game/logic'
 import { useGame } from './game/useGame'
 
@@ -54,6 +56,15 @@ export default function App() {
     })
   }, [])
 
+  // Special days (like Independence Day): confetti and a greeting the moment the puzzle is solved.
+  const celebration = game.archive ? null : celebrationFor(game.puzzle?.puzzleDate)
+  const [confetti, setConfetti] = useState(false)
+  const stopConfetti = useCallback(() => setConfetti(false), [])
+  const celebrateNow = !!celebration && game.status === 'won' && game.settled && !game.restoredFinished
+  useEffect(() => {
+    if (celebrateNow) setConfetti(true)
+  }, [celebrateNow])
+
   // Open the result once the final row has finished flipping.
   useEffect(() => {
     if (!finished || !game.settled || game.restoredFinished) return
@@ -89,6 +100,7 @@ export default function App() {
         }
       />
       <Toast toast={game.toast} />
+      {confetti && celebration && <Confetti onDone={stopConfetti} />}
       {game.unknownGuess && modal === null && (
         <WordNudge
           word={game.unknownGuess}
@@ -167,6 +179,7 @@ export default function App() {
           status={game.status}
           attempts={game.guesses.length}
           shareText={shareText}
+          greeting={game.status === 'won' ? (celebration?.message ?? null) : null}
           onStats={() => setModal('stats')}
           onClose={closeModal}
         />

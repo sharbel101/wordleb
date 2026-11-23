@@ -9,17 +9,20 @@ interface Props {
   status: GameStatus
   attempts: number
   shareText: string
+  /** A greeting for special days, shown when the puzzle was solved. */
+  greeting?: string | null
   onStats: () => void
   onClose: () => void
 }
 
-export function ResultModal({ answer, status, attempts, shareText, onStats, onClose }: Props) {
+export function ResultModal({ answer, status, attempts, shareText, greeting, onStats, onClose }: Props) {
   const countdown = useCountdown()
   const won = status === 'won'
 
   return (
     <Modal title={won ? 'You got it' : 'Not this time'} onClose={onClose}>
       <div className="modal-body result">
+        {greeting && won && <p className="result-greeting">{greeting}</p>}
         <p className="result-lead">
           {won
             ? `Solved in ${attempts} ${attempts === 1 ? 'try' : 'tries'}.`

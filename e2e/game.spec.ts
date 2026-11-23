@@ -303,6 +303,47 @@ test.describe('spelling variants', () => {
   })
 })
 
+test.describe('special day celebration', () => {
+  const DAY = '2026-11-23'
+
+  test('solving on Independence Day shows confetti and the greeting', async ({ page }) => {
+    await page.clock.setFixedTime(new Date(`${DAY}T10:00:00Z`))
+    await mockSupabase(page, { date: DAY, number: puzzleNumberFor(DAY) })
+    await openGame(page)
+    await guess(page, '5obez')
+
+    const celebration = page.getByTestId('celebration')
+    await expect(celebration).toBeVisible({ timeout: 8000 })
+    // It never blocks the game or the buttons underneath.
+    expect(await celebration.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe('none')
+
+    const dialog = page.getByRole('dialog', { name: 'You got it' })
+    await expect(dialog).toBeVisible({ timeout: 8000 })
+    await expect(dialog).toContainText('Happy Independence Day!')
+    await expect(celebration).toHaveCount(0, { timeout: 8000 }) // the confetti ends by itself
+  })
+
+  test('a miss on that day gets no confetti and no greeting', async ({ page }) => {
+    await page.clock.setFixedTime(new Date(`${DAY}T10:00:00Z`))
+    await mockSupabase(page, { date: DAY, number: puzzleNumberFor(DAY) })
+    await openGame(page)
+    await playWrongWords(page)
+    await expect(page.getByRole('dialog', { name: 'Not this time' })).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByTestId('celebration')).toHaveCount(0)
+    await expect(page.getByText('Happy Independence Day!')).toHaveCount(0)
+  })
+
+  test('an ordinary day has no celebration', async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-11-24T10:00:00Z'))
+    await mockSupabase(page, { date: '2026-11-24', number: puzzleNumberFor('2026-11-24') })
+    await openGame(page)
+    await guess(page, '5obez')
+    await expect(page.getByRole('dialog', { name: 'You got it' })).toBeVisible({ timeout: 8000 })
+    await expect(page.getByTestId('celebration')).toHaveCount(0)
+    await expect(page.getByText('Happy Independence Day!')).toHaveCount(0)
+  })
+})
+
 test.describe('tamper-proof attempt counting', () => {
   test('the first guess sends no token, later guesses send the server-issued one, never a history', async ({ page }) => {
     const mock = await mockSupabase(page)
